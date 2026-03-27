@@ -1,0 +1,19 @@
+# Simple Warehouse Map
+# Occupancy grid representation: 0 = free, 100 = occupied, -1 = unknown
+
+image: warehouse_simple.pgm
+resolution: 0.05 # meters per pixel
+origin: [0.0, 0.0, 0.0] # x, y, yaw
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
+
+# Map dimensions in meters
+# 10m x 10m warehouse with simple obstacles
+
+# Obstacles for refernce, actual map should be in .pgm file
+# - Shelving units along sides
+# - Central aisle
+# - Charging station in corner
+# - Pickup stations at bottom
+# - Delivery stations at top

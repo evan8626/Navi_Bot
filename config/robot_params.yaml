@@ -1,0 +1,37 @@
+# Robot Physical Parameters
+
+robot:
+  # Dimensions
+  wheel_base: 0.4    # Distance between wheels (meters)
+  wheel_radius: 0.1  # Wheel radius (meters)
+  robot_radius: 0.25 # Robot footprint radius (meters)
+
+  # Kinematics limits
+  max_linear_velocity: 1.0   # m/s
+  max_angular_velocity: 2.0  # rad/s
+  max_linear_accel: 0.5      # m/s^2
+  max_angular_accel: 1.5     # rad/s^2
+
+  # Encoder specifications
+  encoder_ticks_per_rev: 1000
+
+# Sensor specifications
+sensors:
+  lidar: 
+    range_min: 0.1             # meters
+    range_max: 10.0            # meters
+    angle_min: -3.14159        # radians
+    angle_max: 3.14159         # radians
+    angle_increment: 0.0174533 # radians (1 degree)
+    scan_rate: 10              # Hz
+
+  imu:
+    update_rate: 100         # Hz
+    gyro_noise_stddev: 0.01  # rad/s
+    accel_noise_stddev: 0.01 # m/s^2
+
+  battery:
+    capacity: 10000          # mAh
+    nominal_voltage: 12.0    # volts
+    low_threshold: 20.0      # percent
+    critical_threshold: 10.0 # percent

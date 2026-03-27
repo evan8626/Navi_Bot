@@ -1,0 +1,46 @@
+# Mission Configuration
+
+# Warehouse statistics
+stations:
+  pickup_station_1:
+    x: 2.0
+    y: 1.0
+    theta: 0.0
+  
+  pickup_station_2:
+    x: 5.0
+    y: 1.0
+    theta: 0.0
+
+  delivery_station_1:
+    x: 2.0
+    y: 8.0
+    theta: 1.57
+  
+  delivery_station_2:
+    x: 5.0
+    y: 8.0
+    theta: 1.57
+
+  charging_station:
+    x: 0.5
+    y: 0.5
+    theta: -2.36
+
+# Sample missions
+missions:
+  - id: "mission_001"
+    pickup: "pickup_station_1"
+    delivery: "delivery_station_1"
+    priority: 1
+  
+  - id: "mission_002"
+    pickup: "pickup_station_2"
+    delivery: "delivery_station_2"
+    priority: 2
+
+# Mission parameters
+mission_params:
+  pickup_duration: 5.0    # seconds
+  delivery_duration: 5.0  # seconds
+  max_mission_time: 300.0 # seconds
