@@ -41,12 +41,19 @@ class ImuProcessor:
         self.accel_bias = np.zeros(3)
         self.calibrated = False
 
-    def calibrate(self, num_samples=100):
+    def calibrate(self, num_samples=500):
         """
         Calibrate IMU by computing bias from stationary samples.
-
-        TODO: Implement calibration routine
+        
+        If using ROS use allan_variance_ros and calc noise density 
+        and random walk while recording data for at least 3 hours
+        while on a damped/stationary surface. 
+        If using allan_variance_ros, use Ubuntu 20.04.
+        
+        Since this is a learning project, this calibration code written
+        by the maintainer of this project, Evan Osborn.
         """
+        # TODO: learn more about IMU calibration. This will need to be broken into multiple files
         self.calibrated = True
 
     def process_imu_data(self, imu_msg):
