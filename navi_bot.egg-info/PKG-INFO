@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: navi_bot
+Version: 0.1.0
+Summary: Autonomous navigational robot with real-time constraints.
+Maintainer: Evan Osborn
+Maintainer-email: evan.a.osborn@gmail.com
+License: MIT
+Requires-Dist: setuptools
+Dynamic: license
+Dynamic: maintainer
+Dynamic: maintainer-email
+Dynamic: requires-dist
+Dynamic: summary

@@ -1,4 +1,4 @@
-#!/usr/bin/env pthon3
+#!/usr/bin/env python3
 """
 Pure Pursuit control
 

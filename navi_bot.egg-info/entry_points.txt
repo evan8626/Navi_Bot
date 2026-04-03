@@ -1,0 +1,4 @@
+[console_scripts]
+path_planner = navi_bot.path_planner:main
+robot_controller = navi_bot.robot_controller:main
+state_machine = navi_bot.state_machine:main
