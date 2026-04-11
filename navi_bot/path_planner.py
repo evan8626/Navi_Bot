@@ -286,6 +286,7 @@ class DWAPlanner:
         clearance = min(clearance_list)
         score = -(self.heading_weight * heading) + (self.clearance_weight * clearance) + (self.velocity_weight * vel[0])
         return score
+    
               
 class PathPlannerNode(Node):
     """
@@ -316,6 +317,9 @@ class PathPlannerNode(Node):
         
         # Planning timer (10Hz for global replan checks)
         self.plan_timer = self.create_timer(0.1, self.planning_loop)
+        
+        # Path publisher
+        self.path_pub = self.create_publisher(Path, '/planned_path', 10)
         
         self.get_logger().info("Path Planner initialized")
         
@@ -350,6 +354,14 @@ class PathPlannerNode(Node):
             self.replanning_needed = False
             self.get_logger().info(f"Path planned with {len(path)} waypoints")
             # TODO: Publish path
+            path_msg = Path()
+            for waypoint in path:
+                p = Point()
+                p.x = waypoint[0]
+                p.y = waypoint[1]
+                path_msg.poses.append(p)
+                
+            self.path_pub.publish(path_msg)
         else:
             self.get_logger().warn("No path found to goal")
             

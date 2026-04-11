@@ -5,6 +5,7 @@ This module provides lightweight mock implementations of ROS2 message types
 and the Node class to enable rapid prototyping and testing of robot logic.
 """
 
+import numpy as np
 import time
 from typing import Callable, Any, List
 
@@ -87,7 +88,7 @@ class MockSubscription:
     def __init__(self, msg_type, topic: str, callback: Callable, qos):
         self.msg_type = msg_type
         self.topic = topic
-        self.callback = callable
+        self.callback = callback
         self.qos = qos
 
 class MockPublisher:
@@ -138,7 +139,7 @@ class Node:
 
     def create_timer(self, period: float, callback: Callable):
         timer = MockTimer(period, callback)
-        self._timers.apped(timer)
+        self._timers.append(timer)
         self._logger.info(f"Created timer with period {period}s")
         return timer
 
