@@ -150,13 +150,63 @@ class AStarPlanner:
                         
         return None
                                     
-
-class DStarPlanner:
+class DStarLitePlanner:
     """
-    D* path planner for local planning
+    D* Lite path planner for local planning
     """
     # TODO: Implement D*
-    pass
+    def __init__(self, grid_resolution=0.05):
+        self.grid_resolution = grid_resolution
+        self.occupancy_grid = None
+    
+    def set_occupancy_grid(self, grid):
+        """Update the occupancy grid."""
+        self.occupancy_grid = grid
+    
+    def is_coord_valid(self, row, col):
+        """Checks for existant row/col, and row/col values 0 or greater"""
+        if row is None:
+            logger.info(f"row is {row}")
+            return False
+        elif col is None:
+            logger.info(f"col is {col}")
+            return False
+        elif (row >= 0) and (col >= 0):
+            if self.occupancy_grid is None:
+                return True
+            max_rows = len(self.occupancy_grid)
+            max_cols = len(self.occupancy_grid[0])
+            if (max_rows > row) and (max_cols > col):
+                return True
+            else:
+                return False
+        else:
+            return False
+    
+    def plan(self, start, goal):
+        if start is None:
+            logger.warning("Starting cell is None. Cannot create path.")
+            return None
+        elif goal is None:
+            logger.warning("Goal doesn't exist, no path to calculate.")
+            return None
+        elif self.is_coord_valid(start[0], start[1]) is False:
+            logger.warning("Invalid start coordinates")
+            logger.warning(f"Start coords are X: {start[0]}, Y: {start[1]}")
+            return None
+        elif self.is_coord_valid(goal[0], goal[1]) is False:
+            logger.warning("Invalid goal coordinates")
+            logger.warning(f"Goal coords are X: {goal[0]}, Y: {goal[1]}")
+            return None
+        elif heuristic(start, goal) == 0:
+            logger.info("Already at goal. No path needed.")
+            return None
+        
+        shortest_path = compute_shortest_path(start, goal, self.occupancy_grid)
+        if shortest_path is None:
+            logger.warning("No path found to goal.")
+            return None
+        
 
 class DWAPlanner:
     """
@@ -286,8 +336,7 @@ class DWAPlanner:
         clearance = min(clearance_list)
         score = -(self.heading_weight * heading) + (self.clearance_weight * clearance) + (self.velocity_weight * vel[0])
         return score
-    
-              
+                
 class PathPlannerNode(Node):
     """
     ROS2 node for path planning.
@@ -353,7 +402,6 @@ class PathPlannerNode(Node):
             self.current_path = path
             self.replanning_needed = False
             self.get_logger().info(f"Path planned with {len(path)} waypoints")
-            # TODO: Publish path
             path_msg = Path()
             for waypoint in path:
                 p = Point()

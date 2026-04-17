@@ -42,3 +42,75 @@ Telemetry
 ---
 A small telemetry server will be set up on a Windows based computer so a user can log in and see what the robot has mapped, and where the robot thinks it is in the map. This will be written primarily in CSS, html, and javascript as this will be a web-based telemetry app.
 
+Project Structure
+---
+confg
+    |
+    ---- control_params.yaml   - lists control parameters for the robot for different control schemes.
+    |
+    ---- mission_config.yaml   - creates a small mission plan for the robot to pick up and drop off.
+    |
+    ---- robot_params.yaml     - lists size, speed, and sensor parameters of the robot.
+launch
+    |
+    ---- robot.launch.py       - is the main launcher for the robot controller, the state machine, the path planner, and the simulated sensor nodes
+    |
+    ---- simulation.launch.py  - launcher for the simulator environment.
+maps
+    |
+    ---- warehouse_simple.yaml - a simple 10 meter by 10 meter occupancy grid for the robot to navigate.
+navi_bot
+    |
+    control
+        |
+        ---- kinematics.py - sets forward and reverse kinematic control for robot.
+        |
+        ---- motion_controller.py - PID controller for trajectory tracking and waypoint navigation.
+        |
+        ---- pure_pursuit.py - implements pure pursuit algorithm to determine how fast to follow path.
+    |
+    sensors
+        |
+        ---- imu_processor.py - initializes IMU and reads IMU sensor data.
+        |
+        ---- lidar_processing.py - initializes lidar and reads lidar data.
+        |
+        ---- odometry.py - initializes an odometry sensor and reads data.
+    |
+    utils
+        |
+        ---- geometry.py - common geometry calculations for distance and transforms
+        |
+        ---- profiler.py - monitors execution time, deadline misses, and resource usage
+    |
+    ---- __init__.py - sets version.
+    |
+    ---- mock_ros2.py - mock implementation of ROS2 nodes and message types without needing to install ROS2.
+    |
+    ---- path_planner.py - A*, D* Lite, and DWA planning algorithms are set up and run here.
+    |
+    ---- robot_controller.py - orchestrates all subsystems and coordinates multi-sensor readings.
+    |
+    ---- state_machine.py - robot's state machine.
+tests
+    |
+    ---- AStar_plannner_test.py - tests A* implementation.
+    |
+    ---- DStar_Lite_planner_test.py - tests D* Lite implemetation.
+    |
+    ---- DWA_planner_test.py - tests DWA implementation.
+    |
+    ---- kinematics_test.py - tests kinematics implementation.
+    |
+    ---- path_planner_test.py - tests path planner implementation.
+    |
+    ---- pure_pursuit_test.py - tests pure pursuit implementation.
+    |
+    ---- state_machine_test.py - tests the state machine implementation.
+    |
+    ---- waypoint_nav_test.py - tests the robot's ability to navigate to waypoints.
+package.xml - information about the project.
+|
+setup.py - sets up the project using information from package.xml.
+
+
