@@ -3,7 +3,7 @@
 Pure Pursuit control
 
 Implements pure pursuit control algorithm which uses a lookbehind
-and an arc for dtermining path for robot to follow and how fast
+and an arc for determining path for robot to follow and how fast
 it needs to execute.
 """
 

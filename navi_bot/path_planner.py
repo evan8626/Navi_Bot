@@ -17,6 +17,7 @@ Must meet real-time constraints for safety-critical navigation.
 from navi_bot.mock_ros2 import Node, Twist, Pose2D, Point, Path, OccupancyGrid
 import navi_bot.mock_ros2 as rclpy
 from navi_bot.utils.geometry import distance, angle_between_points, normalize_angle
+import math
 import numpy as np
 import time
 import logging
@@ -81,14 +82,14 @@ class AStarPlanner:
             logger.warning("Invalid goal coordinates")
             logger.warning(f"Goal coords are X: {goal[0]}, Y: {goal[1]}")
             return None
-        elif heuristic(start, goal) == 0:
+        elif heuristic_forward(start, goal) == 0:
             logger.info("Already at goal. No path needed.")
             return None
             
         # h = estimated cost to get from node n to goal (heuristic)
         # g = cost to reach node n from start node 
         # f = total estimated cost of path through node n
-        h = heuristic(start, goal)
+        h = heuristic_forward(start, goal)
         g = 0.0
         f = g + h
         open_list = [] # priority queue
@@ -135,7 +136,7 @@ class AStarPlanner:
                     path.reverse()
                     return path
                 else:
-                    h = heuristic(new_coord, goal)
+                    h = heuristic_forward(new_coord, goal)
                     g = cost_dict[visited_coord] + g_value
                     f = g + h
                     if new_coord in cost_dict:
@@ -149,6 +150,30 @@ class AStarPlanner:
                         heapq.heappush(open_list, (f, new_coord))
                         
         return None
+    
+class U:
+    """Priority queue for D* Lite"""
+    def __init__(self):
+        self.elements = []
+    
+    def Update(self, item, priority):
+        heapq.heappush(self.elements, (priority, item))
+    
+    def Remove(self, item):
+        self.elements = [(p, i) for p, i in self.elements if i != item]
+        heapq.heapify(self.elements)
+    
+    def Insert(self, item, priority):
+        heapq.heappush(self.elements, (priority, item))
+        
+    def Pop(self):
+        return heapq.heappop(self.elements)[1]
+    
+    def Top(self):
+        return self.elements[0][1] if self.elements else None
+    
+    def TopKey(self):
+        return self.elements[0][0] if self.elements else (float('inf'), float('inf'))
                                     
 class DStarLitePlanner:
     """
@@ -158,9 +183,23 @@ class DStarLitePlanner:
     def __init__(self, grid_resolution=0.05):
         self.grid_resolution = grid_resolution
         self.occupancy_grid = None
-    
+        self.previous_grid = None
+        self.k_m = 0
+        self.U = U()
+        self.g_values = {}
+        self.rhs_values = {}
+        
+    def d_star_initialize(self, start, goal):
+        self.g_values[goal] = float('inf')
+        self.rhs_values[goal] = 0.0
+        self.U.Insert(goal, self.calculate_key(goal, start, goal))
+        
     def set_occupancy_grid(self, grid):
         """Update the occupancy grid."""
+        if self.occupancy_grid is None:
+            self.previous_grid = None
+        else:
+            self.previous_grid = self.occupancy_grid
         self.occupancy_grid = grid
     
     def is_coord_valid(self, row, col):
@@ -182,6 +221,72 @@ class DStarLitePlanner:
                 return False
         else:
             return False
+        
+    def calculate_key(self, node, start, goal):
+        """Calculate the key for a node based on its g and rhs values."""
+        g = self.g_values.get(node, float('inf'))
+        rhs = self.rhs_values.get(node, float('inf'))
+        h = heuristic_backward(node, start)
+        k1 = min(g, rhs) + h
+        k2 = min(g, rhs)
+        return (k1, k2)
+    
+    def cost(self, a, b, grid = None):
+        """Cost of moving from a to b. Returns inf if not tranversable."""
+        if grid is None:
+            grid = self.occupancy_grid
+        if not self.is_coord_valid(a[0], a[1]) or not self.is_coord_valid(b[0], b[1]):
+            return float('inf')
+        if grid[a[0]][a[1]] != 0 or grid[b[0]][b[1]] != 0:
+            return float('inf')
+        return 1.0
+
+    def get_successors(self, node):
+        directions = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+        successors = []
+        for dir in directions:
+            new_i = dir[0] + node[0]
+            new_j = dir[1] + node[1]
+            if not self.is_coord_valid(new_i, new_j): continue
+            new_coord = (new_i, new_j)
+            successors.append(new_coord)
+        return successors
+
+    def compute_shortest_path(self, start, goal, grid):
+        pos = goal
+        while (self.U.TopKey() < self.calculate_key(pos, start, goal)) or (self.rhs_values.get(pos) > self.g_values.get(pos, float('inf'))):
+            u = self.U.Top()
+            k_old = self.U.TopKey()
+            k_new = self.calculate_key(u, start, goal)
+            if k_old < k_new:
+                self.U.Update(u, k_new)
+            elif self.g_values.get(u, float('inf')) > self.rhs_values.get(u, float('inf')):
+                self.g_values[u] = self.rhs_values[u]
+                self.U.Remove(u)
+                for s in self.get_successors(u):
+                    if s != goal:
+                        self.rhs_values[s] = min(self.rhs_values.get(s, float('inf')), self.cost(s, u, self.occupancy_grid) + self.g_values.get(u, float('inf')))
+                    self.U.Update(s, self.calculate_key(s, start, goal))
+            else:
+                g_old = self.g_values.get(u, float('inf'))
+                self.g_values[u] = float('inf')
+                for s in self.get_successors(u) + [u]:
+                    if self.rhs_values.get(s, float('inf')) == self.cost(s, u, self.occupancy_grid) + g_old:
+                        if s != goal:
+                            self.rhs_values[s] = min(self.rhs_values.get(s, float('inf')), min([self.cost(s, sp, self.occupancy_grid) + self.g_values.get(sp, float('inf')) for sp in self.get_successors(s)]))
+                    self.U.Update(s, self.calculate_key(s, start, goal))
+        return None
+    
+    def edge_changed(self):
+        changed_edges = []
+        for i in range(len(self.occupancy_grid)):
+            for j in range(len(self.occupancy_grid[0])):
+                if self.previous_grid is not None and self.occupancy_grid[i][j] != self.previous_grid[i][j]:
+                    neighbors = self.get_successors((i, j))
+                    for neighbor in neighbors:
+                        changed_edges.append(((i, j), neighbor))
+                        changed_edges.append((neighbor, (i, j)))
+        return changed_edges
     
     def plan(self, start, goal):
         if start is None:
@@ -198,15 +303,24 @@ class DStarLitePlanner:
             logger.warning("Invalid goal coordinates")
             logger.warning(f"Goal coords are X: {goal[0]}, Y: {goal[1]}")
             return None
-        elif heuristic(start, goal) == 0:
+        elif heuristic_backward(start, goal) == 0:
             logger.info("Already at goal. No path needed.")
             return None
         
-        shortest_path = compute_shortest_path(start, goal, self.occupancy_grid)
-        if shortest_path is None:
-            logger.warning("No path found to goal.")
-            return None
         
+        path = []
+        self.compute_shortest_path(start, goal, self.occupancy_grid)
+        
+        while start != goal:
+            if self.g_values.get(start, float('inf')) == float('inf'):
+                logger.warning("No path to goal exists.")
+                return None
+            path.append(start)
+            s_start = min(self.get_successors(start), key=lambda s: self.cost(start, s, self.occupancy_grid) + self.g_values.get(s, float('inf')))
+            start = s_start
+        path.append(goal)
+        return path
+                
 
 class DWAPlanner:
     """
@@ -349,7 +463,7 @@ class PathPlannerNode(Node):
         # Planners
         self.global_planner = AStarPlanner()
         self.DWA_local_planner = DWAPlanner()
-        self.DStar_local_planner = DStarPlanner()
+        self.DStar_local_planner = DStarLitePlanner()
         
         # Planning state
         self.current_path = None
@@ -381,6 +495,7 @@ class PathPlannerNode(Node):
     def map_callback(self, msg):
         """Handle map updates."""
         self.global_planner.set_occupancy_grid(msg)
+        self.DStar_local_planner.set_occupancy_grid(msg)
         
     def planning_loop(self):
         """
@@ -413,14 +528,53 @@ class PathPlannerNode(Node):
         else:
             self.get_logger().warn("No path found to goal")
             
+        # D Star Lite local replanning
+        if self.replanning_needed:
+            self.DStar_local_planner.d_star_initialize(start, self.current_goal)
+            self.replanning_needed = False
+        last = self.current_goal
+        changed_edges = self.DStar_local_planner.edge_changed()
+        local_path = self.DStar_local_planner.plan(start, self.current_goal)
+        while local_path is not None and len(local_path) > 1:
+            if (self.replanning_needed):
+                self.DStar_local_planner.d_star_initialize(start, self.current_goal)
+                self.replanning_needed = False
+            if self.DStar_local_planner.g_values.get(start, float('inf')) == float('inf'):
+                logger.warning("No path to goal exists.")
+                return
+            s_start = min(self.DStar_local_planner.get_successors(start), key=lambda s: self.DStar_local_planner.cost(start, s, self.DStar_local_planner.occupancy_grid) + self.DStar_local_planner.g_values.get(s, float('inf')))
+            if s_start is not None:
+                self.DStar_local_planner.k_m = self.DStar_local_planner.k_m + heuristic_backward(last, start)
+                last = s_start
+                for edge in changed_edges:
+                    c_old = self.DStar_local_planner.cost(edge[0], edge[1], self.DStar_local_planner.previous_grid)
+                    c_new = self.DStar_local_planner.cost(edge[0], edge[1], self.DStar_local_planner.occupancy_grid)
+                    if c_old > c_new:
+                        if edge[0] != self.current_goal:
+                            self.DStar_local_planner.rhs_values[edge[0]] = min(self.DStar_local_planner.rhs_values.get(edge[0], float('inf')), c_new + self.DStar_local_planner.g_values.get(edge[0], float('inf')))
+                        self.DStar_local_planner.U.Update(edge[0], self.DStar_local_planner.calculate_key(edge[0], start, self.current_goal))
+                    elif self.DStar_local_planner.rhs_values.get(edge[0], float('inf')) == c_old + self.DStar_local_planner.g_values.get(edge[1], float('inf')):
+                        if edge[0] != self.current_goal:
+                            self.DStar_local_planner.rhs_values[edge[1]] = min(self.DStar_local_planner.rhs_values.get(edge[1], float('inf')), min([self.DStar_local_planner.cost(edge[1], s, self.DStar_local_planner.occupancy_grid) + self.DStar_local_planner.g_values.get(s, float('inf')) for s in self.DStar_local_planner.get_successors(edge[1])]))
+                        self.DStar_local_planner.U.Update(edge[1], self.DStar_local_planner.calculate_key(edge[1], start, self.current_goal))
+                changed_edges = self.DStar_local_planner.edge_changed()
+            self.DStar_local_planner.compute_shortest_path(start, self.current_goal, self.DStar_local_planner.occupancy_grid)
+            start = s_start
+            local_path = self.DStar_local_planner.plan(start, self.current_goal)
+                        
+            
         planning_time = time.perf_counter() - planning_start
         if planning_time > self.planning_time_budget:
             self.planning_deadline_misses += 1
             self.get_logger().warn(f"Planning deadline miss! Took {planning_time*1000:.2f}ms")
 
-def heuristic(pos, goal):
+def heuristic_forward(pos, goal):
     """Euclidian distance heuristic."""
     return np.sqrt((pos[0] - goal[0])**2 + (pos[1] - goal[1])**2)
+
+def heuristic_backward(pos, start):
+    """Manhattan distance heuristic."""
+    return abs(pos[0] - start[0]) + abs(pos[1] - start[1])
     
 def main(args=None):
     rclpy.init(args=args)
