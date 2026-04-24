@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Navi_Bot Telemetry</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-0:      #0e0e0c;
+      --bg-1:      #141412;
+      --bg-2:      #1a1a17;
+      --bg-3:      #222220;
+      --border:    rgba(255,255,255,0.07);
+      --border-hi: rgba(255,255,255,0.15);
+      --text-0:    #e8e6df;
+      --text-1:    #9a9890;
+      --text-2:    #5a5852;
+      --green:     #1d9e75;
+      --green-hi:  #5dcaa5;
+      --blue:      #378add;
+      --amber:     #ba7517;
+      --red:       #e24b4a;
+      --purple:    #7f77dd;
+      --r:         6px;
+    }
+
+    html, body { height: 100%; background: var(--bg-0); color: var(--text-0); font-family: 'Courier New', Courier, monospace; font-size: 13px; }
+
+    /* ── App shell ── */
+    #app { display: flex; flex-direction: column; height: 100vh; }
+
+    /* ── Title bar ── */
+    #titlebar {
+      -webkit-app-region: drag;
+      display: flex; align-items: center; gap: 14px;
+      padding: 10px 16px 0;
+      flex-shrink: 0;
+    }
+    #titlebar h1 { font-size: 12px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-1); }
+    #titlebar h1 span { color: var(--text-0); }
+    .title-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+
+    /* ── Tab bar ── */
+    #tabbar {
+      -webkit-app-region: no-drag;
+      display: flex; align-items: flex-end; gap: 2px;
+      padding: 10px 16px 0;
+      border-bottom: 0.5px solid var(--border);
+      flex-shrink: 0;
+    }
+    .main-tab {
+      padding: 7px 18px 8px;
+      font-size: 12px; font-family: inherit; font-weight: 500;
+      letter-spacing: 0.05em; text-transform: uppercase;
+      border: 0.5px solid transparent;
+      border-bottom: none;
+      border-radius: var(--r) var(--r) 0 0;
+      cursor: pointer; background: transparent; color: var(--text-2);
+      transition: color 0.1s;
+      position: relative; bottom: -0.5px;
+    }
+    .main-tab.active {
+      background: var(--bg-1);
+      border-color: var(--border);
+      border-bottom-color: var(--bg-1);
+      color: var(--text-0);
+    }
+    .main-tab:hover:not(.active) { color: var(--text-1); }
+
+    /* ── Tab pages ── */
+    #pages { flex: 1; overflow: hidden; background: var(--bg-1); }
+    .page { display: none; height: 100%; }
+    .page.active { display: flex; flex-direction: column; }
+
+    /* ═══════════════════════════════════════════
+       TAB 1 — LIVE TELEMETRY
+    ═══════════════════════════════════════════ */
+    #live-page { flex-direction: row; padding: 14px; gap: 12px; overflow: hidden; }
+
+    /* Map area */
+    #map-col { display: flex; flex-direction: column; gap: 10px; flex: 1; min-width: 0; }
+
+    #stat-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; flex-shrink: 0; }
+    .stat { background: var(--bg-2); border: 0.5px solid var(--border); border-radius: var(--r); padding: 9px 12px; }
+    .stat-lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-2); margin-bottom: 5px; }
+    .stat-val { font-size: 20px; font-weight: 500; font-family: inherit; color: var(--text-0); }
+    .stat-val.ok   { color: var(--green); }
+    .stat-val.warn { color: var(--amber); }
+    .stat-val.err  { color: var(--red);   }
+
+    #map-card { background: var(--bg-2); border: 0.5px solid var(--border); border-radius: var(--r); padding: 12px; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    #map-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-shrink: 0; }
+    #map-lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-2); }
+    #ws-badge { display: flex; align-items: center; gap: 5px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-2); }
+    .ws-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-2); }
+    .ws-dot.live { background: var(--green); animation: blink 1.2s infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+    #grid-canvas { display: block; width: 100%; image-rendering: pixelated; flex: 1; }
+
+    /* Right sidebar - live */
+    #live-side { display: flex; flex-direction: column; gap: 10px; width: 240px; flex-shrink: 0; overflow-y: auto; }
+
+    .panel { background: var(--bg-2); border: 0.5px solid var(--border); border-radius: var(--r); padding: 11px 13px; }
+    .panel-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-2); margin-bottom: 9px; }
+
+    .pose-row { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 0.5px solid var(--border); font-size: 12px; }
+    .pose-row:last-child { border-bottom: none; }
+    .pose-k { color: var(--text-1); }
+    .pose-v { font-weight: 500; font-family: inherit; }
+
+    .legend { display: flex; flex-direction: column; gap: 5px; }
+    .leg { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--text-1); }
+    .leg-sq  { width: 11px; height: 11px; border-radius: 2px; flex-shrink: 0; }
+    .leg-dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
+
+    #speed-row { display: flex; align-items: center; gap: 7px; margin-top: 9px; border-top: 0.5px solid var(--border); padding-top: 9px; }
+    #speed-row label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-2); white-space: nowrap; }
+    #speed-out { font-size: 12px; color: var(--text-0); min-width: 26px; }
+    input[type=range] { -webkit-appearance: none; appearance: none; height: 3px; background: var(--border-hi); border-radius: 2px; outline: none; flex: 1; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 13px; height: 13px; border-radius: 50%; background: var(--text-0); cursor: pointer; }
+
+    #live-log { font-size: 11px; color: var(--text-1); max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; scrollbar-width: thin; scrollbar-color: var(--border-hi) transparent; }
+    .ll { display: flex; gap: 7px; line-height: 1.5; }
+    .ll-ts  { color: var(--text-2); min-width: 50px; flex-shrink: 0; }
+    .ll-msg { word-break: break-word; }
+    .ll.ok   .ll-msg { color: var(--green); }
+    .ll.warn .ll-msg { color: var(--amber); }
+    .ll.err  .ll-msg { color: var(--red);   }
+    .ll.info .ll-msg { color: var(--blue);  }
+
+    /* WS connect panel */
+    .ws-row { display: flex; gap: 6px; }
+    .ws-row input { flex: 1; background: var(--bg-3); border: 0.5px solid var(--border); border-radius: var(--r); color: var(--text-0); font-family: inherit; font-size: 11px; padding: 5px 7px; outline: none; }
+    .ws-row input:focus { border-color: var(--border-hi); }
+    .ws-row button, .pill-btn { padding: 5px 11px; font-size: 11px; font-family: inherit; border: 0.5px solid var(--border-hi); border-radius: var(--r); cursor: pointer; background: transparent; color: var(--text-0); white-space: nowrap; transition: background 0.1s; }
+    .ws-row button:hover, .pill-btn:hover { background: var(--bg-3); }
+    .pill-btn:active { transform: scale(0.97); }
+    .pill-btn.running { color: var(--red); border-color: var(--red); }
+
+    /* Algo tabs (inside live panel) */
+    .algo-tabs { display: flex; gap: 3px; flex-wrap: wrap; }
+    .atab { padding: 4px 10px; font-size: 11px; font-family: inherit; font-weight: 500; border: 0.5px solid var(--border-hi); border-radius: var(--r); cursor: pointer; background: transparent; color: var(--text-1); transition: all 0.1s; }
+    .atab.active { background: var(--bg-3); color: var(--text-0); border-color: var(--green); }
+    .atab:hover:not(.active) { color: var(--text-0); }
+
+    /* ═══════════════════════════════════════════
+       TAB 2 — TESTS
+    ═══════════════════════════════════════════ */
+    #tests-page { flex-direction: row; overflow: hidden; }
+
+    /* Left: test file list */
+    #test-list-col {
+      width: 260px; flex-shrink: 0;
+      border-right: 0.5px solid var(--border);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    #test-list-header {
+      padding: 12px 14px 10px;
+      border-bottom: 0.5px solid var(--border);
+      display: flex; flex-direction: column; gap: 8px;
+      flex-shrink: 0;
+    }
+    #test-list-header h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-2); font-weight: 500; }
+
+    #dir-row { display: flex; gap: 5px; align-items: center; }
+    #dir-display { flex: 1; font-size: 10px; color: var(--text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: inherit; }
+    #dir-btn { padding: 4px 9px; font-size: 10px; font-family: inherit; border: 0.5px solid var(--border-hi); border-radius: var(--r); cursor: pointer; background: transparent; color: var(--text-1); white-space: nowrap; }
+    #dir-btn:hover { color: var(--text-0); background: var(--bg-3); }
+
+    #test-list { flex: 1; overflow-y: auto; padding: 6px 0; scrollbar-width: thin; scrollbar-color: var(--border-hi) transparent; }
+
+    .test-file {
+      padding: 8px 14px;
+      cursor: pointer;
+      border-left: 2px solid transparent;
+      transition: all 0.1s;
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    }
+    .test-file:hover { background: var(--bg-2); }
+    .test-file.selected { background: var(--bg-2); border-left-color: var(--green); }
+    .test-file.unavailable { opacity: 0.35; cursor: default; }
+    .test-file.unavailable:hover { background: transparent; }
+
+    .tf-name { font-size: 12px; color: var(--text-0); }
+    .tf-sub  { font-size: 10px; color: var(--text-2); margin-top: 1px; }
+
+    .tf-badge {
+      font-size: 10px; padding: 2px 7px;
+      border-radius: 10px; white-space: nowrap; flex-shrink: 0;
+      font-weight: 500;
+    }
+    .badge-ready  { background: rgba(29,158,117,0.15); color: var(--green-hi); }
+    .badge-todo   { background: rgba(90,88,82,0.25);   color: var(--text-2); }
+    .badge-pass   { background: rgba(29,158,117,0.2);  color: var(--green-hi); }
+    .badge-fail   { background: rgba(226,75,74,0.2);   color: var(--red); }
+    .badge-running{ background: rgba(55,138,221,0.15); color: var(--blue); animation: blink 0.8s infinite; }
+
+    /* Test list bottom actions */
+    #list-actions { padding: 10px 14px; border-top: 0.5px solid var(--border); display: flex; gap: 6px; flex-shrink: 0; }
+    #list-actions button { flex: 1; padding: 6px 0; font-size: 11px; font-family: inherit; border: 0.5px solid var(--border-hi); border-radius: var(--r); cursor: pointer; background: transparent; color: var(--text-0); transition: background 0.1s; }
+    #list-actions button:hover { background: var(--bg-3); }
+    #run-all-btn { border-color: var(--green) !important; color: var(--green) !important; }
+    #run-all-btn:hover { background: rgba(29,158,117,0.1) !important; }
+
+    /* Right: test output */
+    #test-output-col { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+
+    #output-header {
+      padding: 11px 16px 10px;
+      border-bottom: 0.5px solid var(--border);
+      display: flex; align-items: center; gap: 10px;
+      flex-shrink: 0;
+    }
+    #output-title { font-size: 12px; font-weight: 500; color: var(--text-0); flex: 1; }
+    #output-meta  { font-size: 11px; color: var(--text-2); }
+    #run-btn-test {
+      padding: 5px 16px; font-size: 11px; font-family: inherit; font-weight: 500;
+      border: 0.5px solid var(--border-hi); border-radius: var(--r);
+      cursor: pointer; background: transparent; color: var(--text-0);
+      transition: all 0.1s;
+    }
+    #run-btn-test:hover { background: var(--bg-3); }
+    #run-btn-test:disabled { opacity: 0.35; cursor: default; }
+    #run-btn-test.running { color: var(--red); border-color: var(--red); }
+
+    /* Summary bar */
+    #summary-bar {
+      display: none; /* shown after a run */
+      padding: 8px 16px;
+      background: var(--bg-2);
+      border-bottom: 0.5px solid var(--border);
+      flex-shrink: 0;
+      display: none;
+      align-items: center; gap: 16px;
+    }
+    #summary-bar.visible { display: flex; }
+    .sum-chip { font-size: 11px; display: flex; align-items: center; gap: 5px; }
+    .sum-dot  { width: 7px; height: 7px; border-radius: 50%; }
+
+    /* Output pane */
+    #output-pane {
+      flex: 1; overflow-y: auto; padding: 12px 16px;
+      font-size: 12px; line-height: 1.7;
+      scrollbar-width: thin; scrollbar-color: var(--border-hi) transparent;
+    }
+    .out-group { margin-bottom: 14px; }
+    .out-group-header {
+      font-size: 11px; font-weight: 500; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--text-2);
+      margin-bottom: 6px; display: flex; align-items: center; gap: 8px;
+    }
+    .out-line { display: flex; align-items: flex-start; gap: 10px; padding: 1px 0; }
+    .out-level { width: 36px; flex-shrink: 0; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-2); padding-top: 2px; }
+    .out-text  { flex: 1; word-break: break-word; font-family: inherit; color: var(--text-0); }
+
+    /* log level colours */
+    .level-info  .out-level { color: var(--blue);  }
+    .level-info  .out-text  { color: var(--text-0); }
+    .level-warning .out-level { color: var(--amber); }
+    .level-warning .out-text  { color: var(--amber); }
+    .level-error .out-level { color: var(--red); }
+    .level-error .out-text  { color: var(--red); }
+    .level-pass  .out-level { color: var(--green); }
+    .level-pass  .out-text  { color: var(--green); }
+    .level-fail  .out-level { color: var(--red); }
+    .level-fail  .out-text  { color: var(--red); }
+
+    .out-separator { border: none; border-top: 0.5px solid var(--border); margin: 10px 0; }
+
+    /* Empty state */
+    #empty-state {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      color: var(--text-2); gap: 8px;
+    }
+    #empty-state p { font-size: 12px; }
+    #empty-state .big { font-size: 28px; opacity: 0.3; }
+
+    /* Scrollbar styling */
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Title bar -->
+  <div id="titlebar">
+    <div class="title-dot"></div>
+    <h1>navi_bot / <span>telemetry</span></h1>
+  </div>
+
+  <!-- Main tab bar -->
+  <div id="tabbar">
+    <button class="main-tab active" onclick="showPage('live', this)">Live</button>
+    <button class="main-tab"       onclick="showPage('tests', this)">Tests</button>
+  </div>
+
+  <div id="pages">
+
+    <!-- ═══════════════════════════════════════
+         PAGE 1 — LIVE TELEMETRY
+    ═══════════════════════════════════════ -->
+    <div id="live-page" class="page active">
+
+      <!-- Map column -->
+      <div id="map-col">
+        <div id="stat-row">
+          <div class="stat"><div class="stat-lbl">nodes expanded</div><div class="stat-val" id="s-nodes">0</div></div>
+          <div class="stat"><div class="stat-lbl">path length (m)</div><div class="stat-val" id="s-len">0.0</div></div>
+          <div class="stat"><div class="stat-lbl">replans</div><div class="stat-val" id="s-replans">0</div></div>
+          <div class="stat"><div class="stat-lbl">elapsed (ms)</div><div class="stat-val" id="s-ms">0</div></div>
+          <div class="stat"><div class="stat-lbl">status</div><div class="stat-val ok" id="s-status">idle</div></div>
+        </div>
+        <div id="map-card">
+          <div id="map-header">
+            <div id="map-lbl">occupancy grid — warehouse_simple (10 m × 10 m)</div>
+            <div id="ws-badge"><div class="ws-dot" id="ws-dot"></div><span id="ws-lbl">sim</span></div>
+          </div>
+          <canvas id="grid-canvas" width="400" height="400"></canvas>
+        </div>
+      </div>
+
+      <!-- Right sidebar -->
+      <div id="live-side">
+
+        <!-- Algo + sim controls -->
+        <div class="panel">
+          <div class="panel-title">planner</div>
+          <div class="algo-tabs" style="margin-bottom:9px;">
+            <button class="atab active" onclick="switchAlgo('astar',this)">A*</button>
+            <button class="atab"        onclick="switchAlgo('dstar',this)">D* Lite</button>
+            <button class="atab"        onclick="switchAlgo('dwa',this)">DWA</button>
+          </div>
+          <div style="display:flex;gap:5px;">
+            <button class="pill-btn" style="flex:1;" id="live-run-btn" onclick="toggleRun()">Run sim</button>
+            <button class="pill-btn" onclick="resetSim()">Reset</button>
+          </div>
+          <div id="speed-row">
+            <label>speed</label>
+            <input type="range" min="1" max="10" value="5" id="speed-sl" step="1"
+                   oninput="document.getElementById('speed-out').textContent=this.value+'x'">
+            <span id="speed-out">5x</span>
+          </div>
+        </div>
+
+        <!-- Robot pose -->
+        <div class="panel">
+          <div class="panel-title">robot pose</div>
+          <div class="pose-row"><span class="pose-k">x</span><span class="pose-v" id="p-x">0.00 m</span></div>
+          <div class="pose-row"><span class="pose-k">y</span><span class="pose-v" id="p-y">0.00 m</span></div>
+          <div class="pose-row"><span class="pose-k">heading</span><span class="pose-v" id="p-hdg">0.0 °</span></div>
+          <div class="pose-row"><span class="pose-k">velocity</span><span class="pose-v" id="p-vel">0.00 m/s</span></div>
+          <div class="pose-row"><span class="pose-k">goal</span><span class="pose-v" id="p-goal">(18, 18)</span></div>
+        </div>
+
+        <!-- Legend -->
+        <div class="panel">
+          <div class="panel-title">legend</div>
+          <div class="legend">
+            <div class="leg"><div class="leg-sq"  style="background:#2c2c2a;"></div>obstacle</div>
+            <div class="leg"><div class="leg-sq"  style="background:#1a1a18;border:0.5px solid rgba(255,255,255,0.1)"></div>free space</div>
+            <div class="leg"><div class="leg-sq"  style="background:#0c2a40;border:0.5px solid #185fa5"></div>explored</div>
+            <div class="leg"><div class="leg-sq"  style="background:#1d9e75;"></div>final path</div>
+            <div class="leg"><div class="leg-dot" style="background:#7f77dd;"></div>start</div>
+            <div class="leg"><div class="leg-dot" style="background:#e24b4a;"></div>robot</div>
+            <div class="leg"><div class="leg-dot" style="background:#ba7517;"></div>goal</div>
+          </div>
+        </div>
+
+        <!-- WebSocket -->
+        <div class="panel">
+          <div class="panel-title">websocket feed</div>
+          <div class="ws-row" style="margin-bottom:6px;">
+            <input type="text" id="ws-url" value="ws://localhost:8765" />
+            <button onclick="connectWS()">Connect</button>
+          </div>
+        </div>
+
+        <!-- Live log -->
+        <div class="panel" style="flex:1;">
+          <div class="panel-title">event log</div>
+          <div id="live-log"></div>
+        </div>
+
+      </div>
+    </div><!-- /live-page -->
+
+
+    <!-- ═══════════════════════════════════════
+         PAGE 2 — TESTS
+    ═══════════════════════════════════════ -->
+    <div id="tests-page" class="page">
+
+      <!-- Left: file list -->
+      <div id="test-list-col">
+        <div id="test-list-header">
+          <h2>test suites</h2>
+          <div id="dir-row">
+            <span id="dir-display">tests/ not set</span>
+            <button id="dir-btn" onclick="pickTestsDir()">Browse</button>
+          </div>
+        </div>
+        <div id="test-list"></div>
+        <div id="list-actions">
+          <button id="run-all-btn" onclick="runAll()">Run all</button>
+          <button onclick="clearAllResults()">Clear</button>
+        </div>
+      </div>
+
+      <!-- Right: output -->
+      <div id="test-output-col">
+        <div id="output-header">
+          <span id="output-title" style="color:var(--text-2);">select a test suite</span>
+          <span id="output-meta"></span>
+          <button id="run-btn-test" onclick="runSelected()" disabled>Run</button>
+        </div>
+        <div id="summary-bar">
+          <div class="sum-chip"><div class="sum-dot" style="background:var(--green)"></div><span id="sum-pass">0 passed</span></div>
+          <div class="sum-chip"><div class="sum-dot" style="background:var(--red)"></div><span id="sum-fail">0 failed</span></div>
+          <div class="sum-chip"><div class="sum-dot" style="background:var(--text-2)"></div><span id="sum-time">—</span></div>
+        </div>
+        <div id="output-pane">
+          <div id="empty-state">
+            <div class="big">[ ]</div>
+            <p>select a suite from the left, then press run</p>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /tests-page -->
+
+  </div><!-- /pages -->
+</div><!-- /app -->
+
+<script>
+// ─────────────────────────────────────────────
+//  Test file registry
+//  status: 'ready' | 'todo' | 'pass' | 'fail' | 'running'
+// ─────────────────────────────────────────────
+const TEST_FILES = [
+  { file: 'AStar_planner_test.py',      label: 'A* planner',      sub: 'path_planner.py',   status: 'ready' },
+  { file: 'DStar_Lite_planner_test.py', label: 'D* Lite planner', sub: 'path_planner.py',   status: 'todo'  },
+  { file: 'DWA_planner_test.py',        label: 'DWA planner',     sub: 'path_planner.py',   status: 'todo'  },
+  { file: 'path_planner_test.py',       label: 'Path planner',    sub: 'integration',       status: 'ready' },
+  { file: 'kinematics_test.py',         label: 'Kinematics',      sub: 'control/kinematics.py', status: 'ready' },
+  { file: 'pure_pursuit_test.py',       label: 'Pure pursuit',    sub: 'control/pure_pursuit.py', status: 'ready' },
+  { file: 'state_machine_test.py',      label: 'State machine',   sub: 'state_machine.py',  status: 'ready' },
+  { file: 'waypoint_nav_test.py',       label: 'Waypoint nav',    sub: 'integration',       status: 'ready' },
+];
+
+// Per-file run results stored here
+const runResults = {};   // { file: { lines: [], passed: n, failed: n, ms: n } }
+
+let selectedFile = null;
+let testsDir     = null;
+let activeRun    = null; // file currently running
+
+// ─────────────────────────────────────────────
+//  Tab switching
+// ─────────────────────────────────────────────
+function showPage(id, el) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.main-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(id + '-page').classList.add('active');
+  el.classList.add('active');
+}
+
+// ─────────────────────────────────────────────
+//  Test list rendering
+// ─────────────────────────────────────────────
+function badgeFor(status) {
+  const map = {
+    ready:   ['ready',   'badge-ready'],
+    todo:    ['todo',    'badge-todo'],
+    pass:    ['pass',    'badge-pass'],
+    fail:    ['fail',    'badge-fail'],
+    running: ['running', 'badge-running'],
+  };
+  const [label, cls] = map[status] || ['?', 'badge-todo'];
+  return `<span class="tf-badge ${cls}">${label}</span>`;
+}
+
+function renderTestList() {
+  const el = document.getElementById('test-list');
+  el.innerHTML = '';
+  TEST_FILES.forEach(tf => {
+    const isTodo = tf.status === 'todo';
+    const result = runResults[tf.file];
+    const displayStatus = result
+      ? (result.failed > 0 ? 'fail' : 'pass')
+      : tf.status;
+    const isSelected = tf.file === selectedFile;
+    const div = document.createElement('div');
+    div.className = 'test-file' +
+      (isTodo    ? ' unavailable' : '') +
+      (isSelected ? ' selected'   : '');
+    div.innerHTML = `
+      <div>
+        <div class="tf-name">${tf.label}</div>
+        <div class="tf-sub">${tf.file}</div>
+      </div>
+      ${badgeFor(displayStatus)}`;
+    if (!isTodo) div.onclick = () => selectFile(tf.file);
+    el.appendChild(div);
+  });
+}
+
+function selectFile(file) {
+  selectedFile = file;
+  renderTestList();
+
+  const tf = TEST_FILES.find(t => t.file === file);
+  document.getElementById('output-title').textContent = tf ? tf.label : file;
+  document.getElementById('output-title').style.color = '';
+  document.getElementById('run-btn-test').disabled = false;
+
+  const result = runResults[file];
+  if (result) {
+    renderOutput(file);
+  } else {
+    document.getElementById('output-pane').innerHTML = '<div id="empty-state"><div class="big">[ ]</div><p>press run to execute this suite</p></div>';
+    document.getElementById('summary-bar').classList.remove('visible');
+    document.getElementById('output-meta').textContent = '';
+  }
+}
+
+// ─────────────────────────────────────────────
+//  Directory picker
+// ─────────────────────────────────────────────
+async function pickTestsDir() {
+  if (!window.navi) {
+    // Dev fallback: prompt
+    const p = prompt('Enter absolute path to tests/ directory:');
+    if (p) { testsDir = p; document.getElementById('dir-display').textContent = p; }
+    return;
+  }
+  const p = await window.navi.pickDir();
+  if (p) {
+    testsDir = p;
+    document.getElementById('dir-display').textContent = p;
+  }
+}
+
+// ─────────────────────────────────────────────
+//  Running tests
+// ─────────────────────────────────────────────
+function runSelected() {
+  if (!selectedFile) return;
+  const tf = TEST_FILES.find(t => t.file === selectedFile);
+  if (tf && tf.status === 'todo') return;
+  startRun(selectedFile);
+}
+
+function runAll() {
+  const runnable = TEST_FILES.filter(t => t.status !== 'todo');
+  if (runnable.length === 0) return;
+  // Queue them sequentially
+  let idx = 0;
+  function next() {
+    if (idx >= runnable.length) return;
+    const tf = runnable[idx++];
+    selectFile(tf.file);
+    startRun(tf.file, next);
+  }
+  next();
+}
+
+function clearAllResults() {
+  Object.keys(runResults).forEach(k => delete runResults[k]);
+  renderTestList();
+  document.getElementById('output-pane').innerHTML = '<div id="empty-state"><div class="big">[ ]</div><p>select a suite from the left, then press run</p></div>';
+  document.getElementById('summary-bar').classList.remove('visible');
+  document.getElementById('output-meta').textContent = '';
+}
+
+function startRun(file, onDone) {
+  if (!testsDir) {
+    appendOutputLine(file, { text: 'tests/ directory not set — click Browse above', level: 'error' });
+    return;
+  }
+  if (activeRun === file) return;
+
+  activeRun = file;
+  runResults[file] = { lines: [], passed: 0, failed: 0, ms: 0, t0: Date.now() };
+
+  // Mark as running in list
+  const tf = TEST_FILES.find(t => t.file === file);
+  if (tf) { tf._prevStatus = tf.status; tf.status = 'running'; }
+  renderTestList();
+
+  // Prepare output pane
+  document.getElementById('output-pane').innerHTML = '';
+  document.getElementById('summary-bar').classList.remove('visible');
+  document.getElementById('output-meta').textContent = 'running...';
+  document.getElementById('run-btn-test').classList.add('running');
+  document.getElementById('run-btn-test').textContent = 'Running...';
+  document.getElementById('run-btn-test').disabled = true;
+
+  if (window.navi) {
+    window.navi.runTest(file, testsDir);
+  } else {
+    // Browser dev-mode: simulate output after delay
+    setTimeout(() => simulateRun(file), 300);
+  }
+
+  if (typeof onDone === 'function') {
+    window._runDoneCallback = onDone;
+  }
+}
+
+function finishRun(file, exitCode) {
+  activeRun = null;
+  const result = runResults[file];
+  if (!result) return;
+  result.ms = Date.now() - result.t0;
+
+  const tf = TEST_FILES.find(t => t.file === file);
+  if (tf) tf.status = result.failed > 0 ? 'fail' : 'pass';
+  renderTestList();
+
+  // Restore run button
+  document.getElementById('run-btn-test').classList.remove('running');
+  document.getElementById('run-btn-test').textContent = 'Run';
+  document.getElementById('run-btn-test').disabled = false;
+  document.getElementById('output-meta').textContent = `exit ${exitCode} · ${result.ms} ms`;
+
+  // Summary bar
+  if (file === selectedFile) {
+    renderSummary(file);
+  }
+
+  if (window._runDoneCallback) {
+    const cb = window._runDoneCallback;
+    window._runDoneCallback = null;
+    setTimeout(cb, 100);
+  }
+}
+
+// ─────────────────────────────────────────────
+//  Output rendering
+// ─────────────────────────────────────────────
+
+// Parse a Python logging line like:
+//   DEBUG:root:TEST 1: blah
+//   INFO:__main__:PASS
+//   WARNING:navi_bot.path_planner:something
+function parseLine(raw) {
+  const m = raw.match(/^(DEBUG|INFO|WARNING|ERROR|CRITICAL):[\w._]+:(.*)$/);
+  if (m) return { level: m[1].toLowerCase(), text: m[2].trim() };
+  return { level: 'debug', text: raw };
+}
+
+function classForLine(line) {
+  const t = line.text.toUpperCase();
+  if (t === 'PASS' || t.endsWith('PASS')) return 'level-pass';
+  if (t === 'FAIL' || t.endsWith('FAIL')) return 'level-fail';
+  const lmap = { warning: 'level-warning', error: 'level-error', info: 'level-info' };
+  return lmap[line.level] || '';
+}
+
+function appendOutputLine(file, parsed) {
+  if (file !== selectedFile) return;
+  const pane = document.getElementById('output-pane');
+  const es = document.getElementById('empty-state');
+  if (es) es.remove();
+
+  const div = document.createElement('div');
+  div.className = 'out-line ' + classForLine(parsed);
+  div.innerHTML = `<span class="out-level">${parsed.level.slice(0,4)}</span><span class="out-text">${escHtml(parsed.text)}</span>`;
+  pane.appendChild(div);
+  pane.scrollTop = pane.scrollHeight;
+}
+
+function renderOutput(file) {
+  const result = runResults[file];
+  if (!result) return;
+  const pane = document.getElementById('output-pane');
+  pane.innerHTML = '';
+  result.lines.forEach(l => {
+    const div = document.createElement('div');
+    div.className = 'out-line ' + classForLine(l);
+    div.innerHTML = `<span class="out-level">${l.level.slice(0,4)}</span><span class="out-text">${escHtml(l.text)}</span>`;
+    pane.appendChild(div);
+  });
+  pane.scrollTop = pane.scrollHeight;
+  renderSummary(file);
+}
+
+function renderSummary(file) {
+  const result = runResults[file];
+  if (!result || result.lines.length === 0) return;
+  document.getElementById('summary-bar').classList.add('visible');
+  document.getElementById('sum-pass').textContent = result.passed + ' passed';
+  document.getElementById('sum-fail').textContent = result.failed + ' failed';
+  document.getElementById('sum-time').textContent = result.ms + ' ms';
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ─────────────────────────────────────────────
+//  IPC listeners (from Electron preload)
+// ─────────────────────────────────────────────
+if (window.navi) {
+  window.navi.onTestLine(({ file, text }) => {
+    const parsed = parseLine(text);
+    const result = runResults[file];
+    if (result) {
+      result.lines.push(parsed);
+      const t = parsed.text.toUpperCase();
+      if (t === 'PASS' || t.endsWith(' PASS')) result.passed++;
+      if (t === 'FAIL' || t.endsWith(' FAIL')) result.failed++;
+    }
+    appendOutputLine(file, parsed);
+  });
+
+  window.navi.onTestDone(({ file, code }) => finishRun(file, code));
+  window.navi.onTestError(({ file, msg }) => {
+    const parsed = { level: 'error', text: 'Spawn error: ' + msg };
+    const result = runResults[file];
+    if (result) { result.lines.push(parsed); result.failed++; }
+    appendOutputLine(file, parsed);
+    finishRun(file, 1);
+  });
+}
+
+// ─────────────────────────────────────────────
+//  Dev-mode simulation (no Electron)
+// ─────────────────────────────────────────────
+function simulateRun(file) {
+  const lines = [
+    'INFO:__main__:A Star Planning Test Suite',
+    'INFO:__main__:TEST 1: None start coordinates, expect immediate return',
+    'INFO:__main__:Start is None and tester is None',
+    'INFO:__main__:PASS',
+    'INFO:__main__:TEST 2: None goal coordinates, expect immediate return',
+    'INFO:__main__:Goal is None and tester is None',
+    'INFO:__main__:PASS',
+    'INFO:__main__:TEST 7: Testing path planner with a straight line path',
+    'INFO:__main__:Path found to goal.',
+    'INFO:__main__:X: 0, Y: 0',
+    'INFO:__main__:X: 0, Y: 7',
+    'INFO:__main__:PASS',
+    'INFO:__main__:Results: 3/3 passed',
+    'INFO:__main__:All tests complete.',
+  ];
+  let i = 0;
+  const tick = () => {
+    if (i >= lines.length) { finishRun(file, 0); return; }
+    const parsed = parseLine(lines[i++]);
+    const result = runResults[file];
+    if (result) {
+      result.lines.push(parsed);
+      const t = parsed.text.toUpperCase();
+      if (t === 'PASS' || t.endsWith(' PASS')) result.passed++;
+      if (t === 'FAIL' || t.endsWith(' FAIL')) result.failed++;
+    }
+    appendOutputLine(file, parsed);
+    setTimeout(tick, 60);
+  };
+  tick();
+}
+
+// ─────────────────────────────────────────────
+//  ── LIVE TAB: map simulation (same as before)
+// ─────────────────────────────────────────────
+const COLS = 20, ROWS = 20, CELL = 20;
+const BASE_MAP = [
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,1,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0,1],
+  [1,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,1,1,1,1,1,0,1,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,1,1,1,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,1,1,0,0,0,0,0,0,0,0,0,1,1,1,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,1,0,0,1,1,1,0,0,0,0,0,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+];
+
+let algo='astar', running=false, animFrame=null, liveState=null, wsConn=null;
+const canvas = document.getElementById('grid-canvas');
+const ctx = canvas.getContext('2d');
+
+function drawMap(grid, explored, path, robotPos, goalPos, startPos) {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
+    ctx.fillStyle = grid[r][c]===1 ? '#2c2c2a' : (explored&&explored[r][c] ? '#0c2a40' : '#1a1a18');
+    ctx.fillRect(c*CELL,r*CELL,CELL,CELL);
+    ctx.strokeStyle='rgba(255,255,255,0.03)'; ctx.lineWidth=0.5;
+    ctx.strokeRect(c*CELL,r*CELL,CELL,CELL);
+  }
+  if(path&&path.length>1){
+    ctx.beginPath(); ctx.strokeStyle='#1d9e75'; ctx.lineWidth=2.5; ctx.lineJoin='round';
+    path.forEach(([pr,pc],i)=>{ const x=pc*CELL+CELL/2,y=pr*CELL+CELL/2; i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
+    ctx.stroke();
+  }
+  if(startPos){const[sr,sc]=startPos;ctx.fillStyle='#7f77dd';ctx.beginPath();ctx.arc(sc*CELL+CELL/2,sr*CELL+CELL/2,5,0,Math.PI*2);ctx.fill();}
+  if(goalPos){const[gr,gc]=goalPos;ctx.fillStyle='#ba7517';ctx.beginPath();ctx.arc(gc*CELL+CELL/2,gr*CELL+CELL/2,7,0,Math.PI*2);ctx.fill();ctx.strokeStyle='rgba(255,255,255,0.25)';ctx.lineWidth=1;ctx.stroke();}
+  if(robotPos){const[rr,rc]=robotPos;ctx.fillStyle='#e24b4a';ctx.beginPath();ctx.arc(rc*CELL+CELL/2,rr*CELL+CELL/2,7,0,Math.PI*2);ctx.fill();ctx.strokeStyle='rgba(255,255,255,0.35)';ctx.lineWidth=1.5;ctx.stroke();}
+}
+
+function setStat(id,val,cls){const e=document.getElementById(id);e.textContent=val;e.className='stat-val'+(cls?' '+cls:'');}
+function setPose(r,c,hdg,vel){document.getElementById('p-x').textContent=(c*0.5).toFixed(2)+' m';document.getElementById('p-y').textContent=(r*0.5).toFixed(2)+' m';document.getElementById('p-hdg').textContent=hdg.toFixed(1)+' °';document.getElementById('p-vel').textContent=vel.toFixed(2)+' m/s';}
+function liveLog(msg,type){const ll=document.getElementById('live-log');const ts=(performance.now()/1000).toFixed(2);const d=document.createElement('div');d.className='ll'+(type?' '+type:'');d.innerHTML=`<span class="ll-ts">${ts}s</span><span class="ll-msg">${msg}</span>`;ll.appendChild(d);ll.scrollTop=ll.scrollHeight;if(ll.children.length>120)ll.removeChild(ll.children[0]);}
+
+function heuristic(r1,c1,r2,c2){return Math.abs(r1-r2)+Math.abs(c1-c2);}
+function neighbors(grid,r,c){return[[-1,0],[1,0],[0,-1],[0,1]].map(([dr,dc])=>[r+dr,c+dc]).filter(([nr,nc])=>nr>=0&&nr<ROWS&&nc>=0&&nc<COLS&&grid[nr][nc]===0);}
+
+function buildState(a){
+  const start=[1,1],goal=[18,18],grid=BASE_MAP.map(r=>[...r]);
+  const explored=Array.from({length:ROWS},()=>new Array(COLS).fill(false));
+  const base={algo:a,grid,explored,start,goal,path:null,done:false,robotPos:[...start],nodes:0,replans:0,ms:0,t0:performance.now(),hdg:0,vel:0,pathStep:0};
+  if(a==='astar'||a==='dstar'){const gScore=Array.from({length:ROWS},()=>new Array(COLS).fill(Infinity));gScore[start[0]][start[1]]=0;return{...base,open:[[heuristic(...start,...goal),0,start,[start]]],gScore,dynamicObstacleAdded:false};}
+  return{...base,floatR:start[0],floatC:start[1],stuckCount:0};
+}
+
+function stepAstar(s,n){
+  if(s.done||s.open.length===0){if(!s.done){setStat('s-status','no path','warn');liveLog('No path found','warn');s.done=true;}return;}
+  s.open.sort((a,b)=>a[0]-b[0]);
+  for(let i=0;i<n;i++){
+    if(s.open.length===0)break;
+    const[,g,cur,path]=s.open.shift();const[cr,cc]=cur;
+    if(s.explored[cr][cc])continue;s.explored[cr][cc]=true;s.nodes++;
+    if(cr===s.goal[0]&&cc===s.goal[1]){s.path=path;s.pathStep=0;setStat('s-status','path found','ok');setStat('s-len',(path.length*0.5).toFixed(1));liveLog('Path found — '+path.length+' waypoints','ok');return;}
+    for(const[nr,nc]of neighbors(s.grid,cr,cc)){const ng=g+1;if(ng<s.gScore[nr][nc]){s.gScore[nr][nc]=ng;s.open.push([ng+heuristic(nr,nc,s.goal[0],s.goal[1]),ng,[nr,nc],[...path,[nr,nc]]]);}}
+  }
+  setStat('s-nodes',s.nodes);setStat('s-ms',Math.round(performance.now()-s.t0));
+}
+
+function stepDstar(s,n){
+  if(!s.dynamicObstacleAdded&&s.nodes>60){s.grid[8][5]=1;s.grid[8][6]=1;s.grid[9][5]=1;s.replans++;setStat('s-replans',s.replans);liveLog('Dynamic obstacle — replanning','warn');s.open=[[heuristic(...s.start,...s.goal),0,s.start,[s.start]]];s.gScore=Array.from({length:ROWS},()=>new Array(COLS).fill(Infinity));s.gScore[s.start[0]][s.start[1]]=0;s.explored=Array.from({length:ROWS},()=>new Array(COLS).fill(false));s.path=null;s.dynamicObstacleAdded=true;}
+  stepAstar(s,n);
+}
+
+function stepDwa(s){
+  if(s.done)return;const[gr,gc]=s.goal;const dr=gr-s.floatR,dc=gc-s.floatC,dist=Math.sqrt(dr*dr+dc*dc);
+  if(dist<0.8){s.done=true;setStat('s-status','goal reached','ok');liveLog('DWA reached goal','ok');return;}
+  const angle=Math.atan2(dr,dc),speed=Math.min(0.3,dist*0.2);
+  let nr=s.floatR+Math.sin(angle)*speed,nc=s.floatC+Math.cos(angle)*speed;
+  const ir=Math.round(nr),ic=Math.round(nc),blocked=ir<0||ir>=ROWS||ic<0||ic>=COLS||s.grid[ir][ic]===1;
+  if(blocked){s.stuckCount++;const perp=angle+Math.PI/2+(s.stuckCount%2===0?0:Math.PI);const cr2=s.floatR+Math.sin(perp)*0.4,cc2=s.floatC+Math.cos(perp)*0.4;const ir2=Math.round(cr2),ic2=Math.round(cc2),b2=ir2<0||ir2>=ROWS||ic2<0||ic2>=COLS||s.grid[ir2][ic2]===1;if(!b2){nr=cr2;nc=cc2;}s.replans++;setStat('s-replans',s.replans);liveLog('DWA avoidance','warn');}
+  s.floatR=nr;s.floatC=nc;s.robotPos=[Math.round(nr),Math.round(nc)];s.explored[s.robotPos[0]][s.robotPos[1]]=true;s.nodes++;
+  s.hdg=(Math.atan2(nr-s.floatR,nc-s.floatC)*180/Math.PI+360)%360;s.vel=speed*2;
+  if(!s.path)s.path=[];s.path.push([...s.robotPos]);
+  setStat('s-nodes',s.nodes);setStat('s-len',(s.path.length*0.5).toFixed(1));setStat('s-ms',Math.round(performance.now()-s.t0));setStat('s-status','navigating','ok');setPose(nr,nc,s.hdg,s.vel);
+}
+
+function stopRun(){running=false;cancelAnimationFrame(animFrame);const b=document.getElementById('live-run-btn');b.textContent='Run sim';b.classList.remove('running');}
+
+function tick(){
+  if(!running)return;
+  const speed=parseInt(document.getElementById('speed-sl').value);
+  if(liveState.algo==='astar'||liveState.algo==='dstar'){
+    if(!liveState.done){liveState.algo==='dstar'?stepDstar(liveState,speed):stepAstar(liveState,speed);}
+    if(liveState.done&&liveState.path){liveState.pathStep=Math.min(liveState.path.length-1,liveState.pathStep+speed);const rPos=liveState.path[liveState.pathStep];liveState.robotPos=rPos;const prev=liveState.path[Math.max(0,liveState.pathStep-1)];setPose(rPos[0],rPos[1],Math.atan2(rPos[0]-prev[0],rPos[1]-prev[1])*180/Math.PI,liveState.pathStep<liveState.path.length-1?0.5:0);if(liveState.pathStep>=liveState.path.length-1)stopRun();}
+    drawMap(liveState.grid,liveState.explored,liveState.path?liveState.path.slice(0,(liveState.pathStep||0)+1):null,liveState.robotPos,liveState.goal,liveState.start);
+  }else{
+    for(let i=0;i<speed;i++)stepDwa(liveState);
+    drawMap(liveState.grid,liveState.explored,liveState.path,liveState.robotPos,liveState.goal,liveState.start);
+    if(liveState.done)stopRun();
+  }
+  setStat('s-nodes',liveState.nodes);setStat('s-ms',Math.round(performance.now()-liveState.t0));
+  animFrame=requestAnimationFrame(tick);
+}
+
+function toggleRun(){
+  const b=document.getElementById('live-run-btn');
+  if(running){stopRun();liveLog('Paused');return;}
+  if(!liveState||liveState.done){liveState=buildState(algo);setStat('s-nodes','0');setStat('s-len','0.0');setStat('s-replans','0');setStat('s-ms','0');setStat('s-status','running','ok');drawMap(liveState.grid,liveState.explored,null,liveState.robotPos,liveState.goal,liveState.start);liveLog('Starting '+algo.toUpperCase()+' — start:(1,1) goal:(18,18)','ok');}
+  running=true;b.textContent='Pause';b.classList.add('running');animFrame=requestAnimationFrame(tick);
+}
+
+function resetSim(){stopRun();liveState=buildState(algo);setStat('s-nodes','0');setStat('s-len','0.0');setStat('s-replans','0');setStat('s-ms','0');setStat('s-status','idle','');drawMap(liveState.grid,liveState.explored,null,liveState.start,liveState.goal,liveState.start);liveLog('Reset — '+algo.toUpperCase(),'info');}
+
+function switchAlgo(a,el){algo=a;document.querySelectorAll('.atab').forEach(t=>t.classList.remove('active'));el.classList.add('active');stopRun();liveState=buildState(a);setStat('s-nodes','0');setStat('s-len','0.0');setStat('s-replans','0');setStat('s-ms','0');setStat('s-status','idle','');drawMap(liveState.grid,liveState.explored,null,liveState.start,liveState.goal,liveState.start);liveLog('Switched to '+a.toUpperCase(),'info');}
+
+// WebSocket
+function connectWS(){const url=document.getElementById('ws-url').value.trim();if(wsConn){wsConn.close();wsConn=null;}liveLog('Connecting to '+url+'...','info');try{wsConn=new WebSocket(url);}catch(e){liveLog('WS error: '+e.message,'err');return;}wsConn.onopen=()=>{document.getElementById('ws-dot').className='ws-dot live';document.getElementById('ws-lbl').textContent='live';liveLog('WebSocket connected','ok');stopRun();};wsConn.onclose=()=>{document.getElementById('ws-dot').className='ws-dot';document.getElementById('ws-lbl').textContent='sim';liveLog('WebSocket closed','warn');wsConn=null;};wsConn.onerror=()=>liveLog('WebSocket error','err');wsConn.onmessage=(event)=>{let f;try{f=JSON.parse(event.data);}catch{return;}if(!liveState)liveState=buildState(algo);const s=liveState;switch(f.type){case'map_init':if(f.grid)s.grid=f.grid;s.explored=Array.from({length:ROWS},()=>new Array(COLS).fill(false));s.path=null;drawMap(s.grid,s.explored,null,s.robotPos,s.goal,s.start);liveLog('Map init from feed','info');break;case'explored':if(s.explored[f.row])s.explored[f.row][f.col]=true;s.nodes++;setStat('s-nodes',s.nodes);drawMap(s.grid,s.explored,s.path,s.robotPos,s.goal,s.start);break;case'path':s.path=f.waypoints;setStat('s-len',(f.waypoints.length*0.5).toFixed(1));drawMap(s.grid,s.explored,s.path,s.robotPos,s.goal,s.start);break;case'pose':s.robotPos=[Math.round(f.row),Math.round(f.col)];setPose(f.row,f.col,f.heading||0,f.velocity||0);drawMap(s.grid,s.explored,s.path,s.robotPos,s.goal,s.start);break;case'obstacle':if(s.grid[f.row])s.grid[f.row][f.col]=f.value;drawMap(s.grid,s.explored,s.path,s.robotPos,s.goal,s.start);break;case'replan':s.replans++;setStat('s-replans',s.replans);liveLog('Replan: '+(f.reason||''),'warn');s.path=null;s.explored=Array.from({length:ROWS},()=>new Array(COLS).fill(false));s.nodes=0;setStat('s-nodes',0);break;case'status':setStat('s-status',f.value,f.cls||'');break;case'log':liveLog(f.msg,f.level||'');break;}};}
+
+// ─────────────────────────────────────────────
+//  Init
+// ─────────────────────────────────────────────
+liveState = buildState('astar');
+drawMap(liveState.grid, liveState.explored, null, liveState.start, liveState.goal, liveState.start);
+liveLog('Dashboard ready — run sim or connect WebSocket for live feed', 'ok');
+renderTestList();
+</script>
+</body>
+</html>

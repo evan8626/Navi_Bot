@@ -179,7 +179,6 @@ class DStarLitePlanner:
     """
     D* Lite path planner for local planning
     """
-    # TODO: Implement D*
     def __init__(self, grid_resolution=0.05):
         self.grid_resolution = grid_resolution
         self.occupancy_grid = None
@@ -215,6 +214,9 @@ class DStarLitePlanner:
                 return True
             max_rows = len(self.occupancy_grid)
             max_cols = len(self.occupancy_grid[0])
+            if (self.occupancy_grid[row][col] != 0):
+                logger.info(f"Cell at row {row}, col {col} is occupied.")
+                return False
             if (max_rows > row) and (max_cols > col):
                 return True
             else:
@@ -238,6 +240,7 @@ class DStarLitePlanner:
         if not self.is_coord_valid(a[0], a[1]) or not self.is_coord_valid(b[0], b[1]):
             return float('inf')
         if grid[a[0]][a[1]] != 0 or grid[b[0]][b[1]] != 0:
+            logger.info(f"Cost from {a} to {b} is infinite due to occupancy.")
             return float('inf')
         return 1.0
 
@@ -306,7 +309,6 @@ class DStarLitePlanner:
         elif heuristic_backward(start, goal) == 0:
             logger.info("Already at goal. No path needed.")
             return None
-        
         
         path = []
         self.compute_shortest_path(start, goal, self.occupancy_grid)

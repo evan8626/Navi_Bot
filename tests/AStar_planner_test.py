@@ -12,7 +12,6 @@ import logging
 import numpy as np
 import sys
 
-
 from navi_bot.path_planner import AStarPlanner
 
 logger = logging.getLogger(__name__)
