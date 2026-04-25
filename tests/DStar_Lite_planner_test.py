@@ -18,19 +18,29 @@ def test_goal_callback(grid):
     """
     Create a test goal with x and y coords
     """
-    coordinates = np.random.randint(0, grid.shape[0]-1, size=2)
-    x = coordinates[0]
-    y = coordinates[1]
-    return (x, y)
+    free_cells = np.argwhere(grid == 0)
+    idx = np.random.randint(0, len(free_cells))
+    return tuple(int(v) for v in free_cells[idx])
 
 def get_start_callback(grid):
     """
     Get start position from grid
     """
-    coordinates = np.random.randint(0, grid.shape[0]-1, size=2)
-    x = coordinates[0]
-    y = coordinates[1]
-    return (x, y)
+    free_cells = np.argwhere(grid == 0)
+    idx = np.random.randint(0, len(free_cells))
+    return tuple(int(v) for v in free_cells[idx])
+
+def path_is_valid(path, grid):
+    """
+    Check if the path is valid (not None, not empty, and all cells are free)
+    """
+    if path is None or len(path) == 0:
+        return False
+    for cell in path:
+        row, col = cell
+        if row < 0 or row >= grid.shape[0] or col < 0 or col >= grid.shape[1] or grid[row, col] == 1:
+            return False
+    return True
 
 # TEST METHODS
 def test_none_start():
@@ -40,9 +50,10 @@ def test_none_start():
     """
     logger.info("TEST 1: None Start Position")
     d_star = setup_DStar_Lite()
+    map1 = clear_map()
     start = None
     goal = (7, 7)
-    d_star.set_occupancy_grid(clear_map())
+    d_star.set_occupancy_grid(map1)
     
     try:
         path = d_star.plan(start, goal)
@@ -59,9 +70,10 @@ def test_none_goal():
     """
     logger.info("TEST 2: None Goal Position")
     d_star = setup_DStar_Lite()
+    map1 = clear_map()
     start = (0, 0)
     goal = None
-    d_star.set_occupancy_grid(clear_map())
+    d_star.set_occupancy_grid(map1)
     
     try:
         path = d_star.plan(start, goal)
@@ -78,9 +90,10 @@ def test_invalid_start():
     """
     logger.info("TEST 3: Invalid Start Position")
     d_star = setup_DStar_Lite()
+    map1 = clear_map()
     start = (-1, -1)  # Invalid coordinates
     goal = (7, 7)
-    d_star.set_occupancy_grid(clear_map())
+    d_star.set_occupancy_grid(map1)
     
     try:
         path = d_star.plan(start, goal)
@@ -97,9 +110,10 @@ def test_invalid_goal():
     """
     logger.info("TEST 4: Invalid Goal Position")
     d_start = setup_DStar_Lite()
+    map1 = clear_map()
     start = (0, 0)
     goal = (-1, -1)  # Invalid coordinates
-    d_start.set_occupancy_grid(clear_map())
+    d_start.set_occupancy_grid(map1)
 
     try:
         path = d_start.plan(start, goal)
@@ -115,9 +129,10 @@ def test_already_at_goal():
     """
     logger.info("TEST 5: Already at Goal")
     d_start = setup_DStar_Lite()
+    map1 = clear_map()
     start = (3, 3)
     goal = (3, 3) 
-    d_start.set_occupancy_grid(clear_map())
+    d_start.set_occupancy_grid(map1)
     
     try:
         path = d_start.plan(start, goal)
@@ -138,10 +153,11 @@ def test_blocked_map():
     """
     logger.info("TEST 6: Blocked Map")
     d_star = setup_DStar_Lite()
-    start = test_goal_callback(blocked_map())
-    goal = test_goal_callback(blocked_map())
+    start = (0, 0)
+    goal = (7, 7)
     logger.info(f"Start: {start}, Goal: {goal}")
-    d_star.set_occupancy_grid(blocked_map())
+    map_block = blocked_map()
+    d_star.set_occupancy_grid(map_block)
     try:
         path = d_star.plan(start, goal)
         if path is None: 
@@ -152,6 +168,82 @@ def test_blocked_map():
             return False
     except Exception as e:
         logger.error(f"Test Blocked Map: Failed with error {e}\n")
+        return False
+    
+def test_random_coords_clear_map():
+    """
+    Clear map with randomly generated start and goal coordinates.
+    """
+    logger.info("TEST 7: Random Coords on Clear Map")
+    d_star = setup_DStar_Lite()
+    
+    map1 = clear_map()
+    
+    start = get_start_callback(map1)  #(0, 0)
+    goal = test_goal_callback(map1) #(0, 7)
+    d_star.set_occupancy_grid(map1)
+    try:
+        path = d_star.plan(start, goal)
+        if path_is_valid(path, map1):
+            logger.info("Test Random Coords on Clear Map: Passed\n")
+            return True
+        else:
+            logger.error(f"Test Random Coords on Clear Map, but invalid path returned: {path}\n")
+            return False
+    except Exception as e:
+        logger.error(f"Test Random Coords on Clear Map: Failed with error {e}\n")
+        return False
+    
+def test_random_coords_obstacle_map():
+    """
+    Obstable map with randomly generated start and goal coordinates.
+    """
+    logger.info("TEST 8: Random Coords on map with obstacles")
+    d_star = setup_DStar_Lite()
+    
+    map1 = obstacle_map()
+    
+    start = get_start_callback(map1)  
+    goal = test_goal_callback(map1) 
+    d_star.set_occupancy_grid(map1)
+    
+    try:
+        path = d_star.plan(start, goal)
+        if path_is_valid(path, map1):
+            logger.info("Test Random Coords on Obstacle Map: Passed\n")
+            return True
+        else:
+            logger.error(f"Test Random Coords on Obstacle Map, but invalid path returned: {path}\n")
+            return False
+    except Exception as e:
+        logger.error(f"Test Random Coords on Obstacle Map: Failed with error {e}\n")
+        return False
+    
+def test_random_coords_on_moving_map():
+    """
+    Randomly generated start and goal coords, with changing map
+    """
+    logger.info("TEST 9: Random Coords on moving map")
+    d_star = setup_DStar_Lite()
+    
+    map1 = obstacle_map()
+    map2 = obstacle_map2()
+    
+    start = get_start_callback(map1)  
+    goal = test_goal_callback(map1) 
+    d_star.set_occupancy_grid(map1)
+    
+    try:
+        path = d_star.plan(start, goal)
+        d_star.set_occupancy_grid(map2)
+        if path_is_valid(path, map1):
+            logger.info("Test Random Coords on Moving Map: Passed\n")
+            return True
+        else:
+            logger.error(f"Test Random Coords on Moving Map, but invalid path returned: {path}\n")
+            return False
+    except Exception as e:
+        logger.error(f"Test Random Coords on Moving Map: Failed with error {e}\n")
         return False
 
 def clear_map():
@@ -199,6 +291,21 @@ def obstacle_map():
         [1, 0, 1, 0, 1, 0, 1, 0]
     ])
     
+def obstacle_map2():
+    """
+    Map with obstacles
+    """
+    return np.array([
+        [0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 1, 1, 0, 1, 1, 1],
+        [0, 0, 0, 0, 0, 1, 0, 0],
+        [0, 1, 1, 1, 0, 1, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [1, 0, 1, 0, 1, 0, 1, 0],
+        [1, 0, 1, 0, 1, 0, 1, 0],
+        [1, 0, 1, 0, 1, 0, 1, 0]
+    ])
+    
 def main():
     logger.info("D Star Lite Planning Test Suite\n")
     results = []
@@ -209,6 +316,9 @@ def main():
     results.append(test_invalid_goal())
     results.append(test_already_at_goal())
     results.append(test_blocked_map())
+    results.append(test_random_coords_clear_map())
+    results.append(test_random_coords_obstacle_map())
+    results.append(test_random_coords_on_moving_map())
     
     logger.info(f"Results: {sum(results)}/{len(results)} passed")
     logger.info("All tests complete.")

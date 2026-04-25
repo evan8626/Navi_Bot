@@ -179,6 +179,11 @@ class StateMachine(Node):
     def handle_navigating_to_pickup(self):
         """Handle PICK_NAV state logic"""
         self.current_mission.status = 'navigating'
+        goal = Pose2D()
+        goal.x = self.current_mission.pickup_location[0]
+        goal.y = self.current_mission.pickup_location[1]
+        self.goal_pub.publish(goal)
+        
         if self.is_at_goal:
             self.current_mission.status = 'picking_up'
             self.transition_state(RobotState.PICKING_UP)

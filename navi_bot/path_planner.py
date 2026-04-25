@@ -157,6 +157,7 @@ class U:
         self.elements = []
     
     def Update(self, item, priority):
+        self.Remove(item)
         heapq.heappush(self.elements, (priority, item))
     
     def Remove(self, item):
@@ -189,9 +190,13 @@ class DStarLitePlanner:
         self.rhs_values = {}
         
     def d_star_initialize(self, start, goal):
+        self.k_m = 0
+        self.U = U()
+        self.g_values = {}
+        self.rhs_values = {}
         self.g_values[goal] = float('inf')
         self.rhs_values[goal] = 0.0
-        self.U.Insert(goal, self.calculate_key(goal, start, goal))
+        self.U.Insert(goal, self.calculate_key(goal, start))
         
     def set_occupancy_grid(self, grid):
         """Update the occupancy grid."""
@@ -214,17 +219,17 @@ class DStarLitePlanner:
                 return True
             max_rows = len(self.occupancy_grid)
             max_cols = len(self.occupancy_grid[0])
+            if (max_rows <= row) or (max_cols <= col):
+                return False
             if (self.occupancy_grid[row][col] != 0):
+                # cell is occupied
                 logger.info(f"Cell at row {row}, col {col} is occupied.")
                 return False
-            if (max_rows > row) and (max_cols > col):
-                return True
-            else:
-                return False
+            return True
         else:
             return False
         
-    def calculate_key(self, node, start, goal):
+    def calculate_key(self, node, start):
         """Calculate the key for a node based on its g and rhs values."""
         g = self.g_values.get(node, float('inf'))
         rhs = self.rhs_values.get(node, float('inf'))
@@ -256,20 +261,22 @@ class DStarLitePlanner:
         return successors
 
     def compute_shortest_path(self, start, goal, grid):
-        pos = goal
-        while (self.U.TopKey() < self.calculate_key(pos, start, goal)) or (self.rhs_values.get(pos) > self.g_values.get(pos, float('inf'))):
+        pos = start
+        while (self.U.TopKey() < self.calculate_key(pos, start)) or (self.rhs_values.get(pos, float('inf')) != self.g_values.get(pos, float('inf'))):
             u = self.U.Top()
             k_old = self.U.TopKey()
-            k_new = self.calculate_key(u, start, goal)
+            k_new = self.calculate_key(u, start)
             if k_old < k_new:
                 self.U.Update(u, k_new)
             elif self.g_values.get(u, float('inf')) > self.rhs_values.get(u, float('inf')):
                 self.g_values[u] = self.rhs_values[u]
                 self.U.Remove(u)
                 for s in self.get_successors(u):
-                    if s != goal:
-                        self.rhs_values[s] = min(self.rhs_values.get(s, float('inf')), self.cost(s, u, self.occupancy_grid) + self.g_values.get(u, float('inf')))
-                    self.U.Update(s, self.calculate_key(s, start, goal))
+                    new_rhs = self.cost(s, u) + self.g_values[u]
+                    if new_rhs < self.rhs_values.get(s, float('inf')):
+                        if s != goal:
+                            self.rhs_values[s] = min(self.rhs_values.get(s, float('inf')), self.cost(s, u, self.occupancy_grid) + self.g_values.get(u, float('inf')))
+                        self.U.Update(s, self.calculate_key(s, start))
             else:
                 g_old = self.g_values.get(u, float('inf'))
                 self.g_values[u] = float('inf')
@@ -277,7 +284,7 @@ class DStarLitePlanner:
                     if self.rhs_values.get(s, float('inf')) == self.cost(s, u, self.occupancy_grid) + g_old:
                         if s != goal:
                             self.rhs_values[s] = min(self.rhs_values.get(s, float('inf')), min([self.cost(s, sp, self.occupancy_grid) + self.g_values.get(sp, float('inf')) for sp in self.get_successors(s)]))
-                    self.U.Update(s, self.calculate_key(s, start, goal))
+                    self.U.Update(s, self.calculate_key(s, start))
         return None
     
     def edge_changed(self):
@@ -292,6 +299,7 @@ class DStarLitePlanner:
         return changed_edges
     
     def plan(self, start, goal):
+        
         if start is None:
             logger.warning("Starting cell is None. Cannot create path.")
             return None
@@ -309,15 +317,30 @@ class DStarLitePlanner:
         elif heuristic_backward(start, goal) == 0:
             logger.info("Already at goal. No path needed.")
             return None
-        
+        logger.info(f"Planning path from {start} to {goal} using D* Lite.")
         path = []
+        self.d_star_initialize(start, goal)
+        self.calculate_key(goal, start)
         self.compute_shortest_path(start, goal, self.occupancy_grid)
+        edges_changed = self.edge_changed()
         
+        if edges_changed:
+            self.compute_shortest_path(start, goal, self.occupancy_grid)
+        
+        visited = set()
         while start != goal:
+            if start in visited:
+                logger.warning(f"Already visited {start} in path extraction.")
+                return None
+            visited.add(start)
             if self.g_values.get(start, float('inf')) == float('inf'):
                 logger.warning("No path to goal exists.")
                 return None
             path.append(start)
+            successors = self.get_successors(start)
+            if not successors:
+                logger.warning(f"No successors available. Path is blocked at {start}.")
+                return None
             s_start = min(self.get_successors(start), key=lambda s: self.cost(start, s, self.occupancy_grid) + self.g_values.get(s, float('inf')))
             start = s_start
         path.append(goal)
@@ -486,6 +509,11 @@ class PathPlannerNode(Node):
         # Path publisher
         self.path_pub = self.create_publisher(Path, '/planned_path', 10)
         
+        # D Star initial parameters
+        self.dstar_start = None
+        self.dstar_last = None
+        self.dstar_initialized = False
+        
         self.get_logger().info("Path Planner initialized")
         
     def goal_callback(self, msg):
@@ -534,6 +562,8 @@ class PathPlannerNode(Node):
         if self.replanning_needed:
             self.DStar_local_planner.d_star_initialize(start, self.current_goal)
             self.replanning_needed = False
+            
+        # TODO must fix the lines between here and 590 so I am not relying on that while loop, and instead working on ROS2 timers and callbacks
         last = self.current_goal
         changed_edges = self.DStar_local_planner.edge_changed()
         local_path = self.DStar_local_planner.plan(start, self.current_goal)
@@ -554,15 +584,16 @@ class PathPlannerNode(Node):
                     if c_old > c_new:
                         if edge[0] != self.current_goal:
                             self.DStar_local_planner.rhs_values[edge[0]] = min(self.DStar_local_planner.rhs_values.get(edge[0], float('inf')), c_new + self.DStar_local_planner.g_values.get(edge[0], float('inf')))
-                        self.DStar_local_planner.U.Update(edge[0], self.DStar_local_planner.calculate_key(edge[0], start, self.current_goal))
+                        self.DStar_local_planner.U.Update(edge[0], self.DStar_local_planner.calculate_key(edge[0], start))
                     elif self.DStar_local_planner.rhs_values.get(edge[0], float('inf')) == c_old + self.DStar_local_planner.g_values.get(edge[1], float('inf')):
                         if edge[0] != self.current_goal:
                             self.DStar_local_planner.rhs_values[edge[1]] = min(self.DStar_local_planner.rhs_values.get(edge[1], float('inf')), min([self.DStar_local_planner.cost(edge[1], s, self.DStar_local_planner.occupancy_grid) + self.DStar_local_planner.g_values.get(s, float('inf')) for s in self.DStar_local_planner.get_successors(edge[1])]))
-                        self.DStar_local_planner.U.Update(edge[1], self.DStar_local_planner.calculate_key(edge[1], start, self.current_goal))
+                        self.DStar_local_planner.U.Update(edge[1], self.DStar_local_planner.calculate_key(edge[1], start))
                 changed_edges = self.DStar_local_planner.edge_changed()
             self.DStar_local_planner.compute_shortest_path(start, self.current_goal, self.DStar_local_planner.occupancy_grid)
             start = s_start
             local_path = self.DStar_local_planner.plan(start, self.current_goal)
+            # TODO Fix above!
                         
             
         planning_time = time.perf_counter() - planning_start
