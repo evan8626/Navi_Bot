@@ -825,7 +825,7 @@ function stepAstar(s,n){
 }
 
 function stepDstar(s,n){
-  if(!s.dynamicObstacleAdded&&s.nodes>60){s.grid[8][5]=1;s.grid[8][6]=1;s.grid[9][5]=1;s.replans++;setStat('s-replans',s.replans);liveLog('Dynamic obstacle — replanning','warn');s.open=[[heu(...s.start,...s.goal),0,s.start,[s.start]]];s.gScore=Array.from({length:ROWS},()=>new Array(COLS).fill(Infinity));s.gScore[s.start[0]][s.start[1]]=0;s.explored=Array.from({length:ROWS},()=>new Array(COLS).fill(false));s.path=null;s.dynamicObstacleAdded=true;}
+  if(!s.dynamicObstacleAdded&&s.nodes>60){s.grid[9][5]=1;s.grid[8][6]=1;s.grid[9][5]=1;s.replans++;setStat('s-replans',s.replans);liveLog('Dynamic obstacle — replanning','warn');s.open=[[heu(...s.start,...s.goal),0,s.start,[s.start]]];s.gScore=Array.from({length:ROWS},()=>new Array(COLS).fill(Infinity));s.gScore[s.start[0]][s.start[1]]=0;s.explored=Array.from({length:ROWS},()=>new Array(COLS).fill(false));s.path=null;s.dynamicObstacleAdded=true;}
   stepAstar(s,n);
 }
 

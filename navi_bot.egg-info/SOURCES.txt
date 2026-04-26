@@ -30,3 +30,4 @@ navi_bot/sensors/odometry.py
 navi_bot/utils/__init__.py
 navi_bot/utils/geometry.py
 navi_bot/utils/profiler.py
+navi_bot/utils/websocket.py
