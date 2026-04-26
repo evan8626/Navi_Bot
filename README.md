@@ -44,6 +44,7 @@ A small telemetry server will be set up on a Windows based computer so a user ca
 
 Project Structure
 ---
+```
 confg
     |
     ---- control_params.yaml   - lists control parameters for the robot for different control schemes.
@@ -121,5 +122,5 @@ tests
 package.xml - information about the project.
 |
 setup.py - sets up the project using information from package.xml.
-
+```
 
