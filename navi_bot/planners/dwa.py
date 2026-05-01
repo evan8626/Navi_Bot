@@ -51,6 +51,19 @@ class DWAPlanner:
             goal (tuple): (x, y) goal position
             obstacles (List): obstacle points
         """
+        if current_pose is None:
+            logger.warning("Current pose is None. Cannot plan.")
+            return None
+        elif current_vel is None:
+            logger.warning("Current velocity is None. Cannot plan.")
+            return None
+        elif goal is None:
+            logger.warning("Goal is None. Cannot plan.")
+            return None
+        elif obstacles is None:
+            logger.warning("Obstacles list is None. Cannot plan.")
+            return None
+        
         time_horizon = 2.0
         step_time = 0.1
         control_period = 0.5

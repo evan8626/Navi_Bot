@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
+
 import numpy as np
 import logging
-from navi_bot.path_planner import DStarLitePlanner
+
+from navi_bot.planners.dstar_lite import DStarLitePlanner
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
-# SET UP METHODS
+# MARK: Setup Methods
+
 def setup_DStar_Lite():
     """
     Setting up D Start Lite replanning algorithm
@@ -42,7 +45,10 @@ def path_is_valid(path, grid):
             return False
     return True
 
-# TEST METHODS
+# END SETUP METHODS
+
+# MARK: Test Methods
+
 def test_none_start():
     """
     Test D* Lite with None start position
@@ -196,7 +202,7 @@ def test_random_coords_clear_map():
     
 def test_random_coords_obstacle_map():
     """
-    Obstable map with randomly generated start and goal coordinates.
+    Obstacle map with randomly generated start and goal coordinates.
     """
     logger.info("TEST 8: Random Coords on map with obstacles")
     d_star = setup_DStar_Lite()
@@ -245,6 +251,8 @@ def test_random_coords_on_moving_map():
     except Exception as e:
         logger.error(f"Test Random Coords on Moving Map: Failed with error {e}\n")
         return False
+
+# MARK: Maps
 
 def clear_map():
     """
@@ -305,7 +313,9 @@ def obstacle_map2():
         [1, 0, 1, 0, 1, 0, 1, 0],
         [1, 0, 1, 0, 1, 0, 1, 0]
     ])
-    
+
+# MARK: Main Method
+
 def main():
     logger.info("D Star Lite Planning Test Suite\n")
     results = []

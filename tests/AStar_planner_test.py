@@ -12,10 +12,12 @@ import logging
 import numpy as np
 import sys
 
-from navi_bot.path_planner import AStarPlanner
+from navi_bot.planners.astar import AStarPlanner
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
+
+# MARK: Setup Methods
 
 def setup_AStar():
     """
@@ -50,7 +52,9 @@ def test_none_start():
         logger.warning(f"Start is {start}, but tester returned {tester}")
         logger.warning("FAIL")
         return passed
-        
+
+# MARK: Test Methods
+ 
 def test_none_goal():
     """Test 2: None goal coordinates"""
     passed = False
@@ -304,6 +308,8 @@ def test_staggered_obstacle():
         return passed
     return passed
 
+# MARK: Maps
+
 def clear_map():
     """
     Obstacle-less map
@@ -348,7 +354,9 @@ def obstacle_map():
         [1, 0, 1, 0, 1, 0, 1, 0],
         [1, 0, 1, 0, 1, 0, 1, 0]
     ])
-    
+
+#MARK: Main Method
+ 
 def main():
     logger.info("A Star Planning Test Suite")
     results = []

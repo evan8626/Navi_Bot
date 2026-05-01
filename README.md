@@ -4,7 +4,7 @@ The goal of this project is to:
     <li> Continue building skills I have fostered in my professional career </li>
     <li> Make these skills a little more publically visible. </li>
 </ol>
-This project will not be ground breaking or feature any "WOW" tech. This is strictly meant to take what I know, build with it, and learn a bit along the way. This nav bot will employ the A* path planning algorithm for path planning. To follow that path, it will use the pure pursuit algorithm. Finally, for dyanmic response to changes in the path (an obstacle moves in front of the robot) DWA will be used.
+This project will not be ground breaking or feature any "WOW" tech. This is strictly meant to take what I know, build with it, and learn a bit along the way. This nav bot will employ the A* path planning algorithm for path planning. To follow that path, it will use the pure pursuit algorithm. Finally, for dyanmic response to changes in the path (an obstacle moves in front of the robot) DWA will be used. D* Lite is also an option for dynamic replanning.
 
 Motion Control/Realtime Hardware
 ---
@@ -44,6 +44,7 @@ A small telemetry server will be set up on a Windows based computer so a user ca
 
 Project Structure
 ---
+```
 confg
     |
     ---- control_params.yaml   - lists control parameters for the robot for different control schemes.
@@ -121,5 +122,5 @@ tests
 package.xml - information about the project.
 |
 setup.py - sets up the project using information from package.xml.
-
+```
 
