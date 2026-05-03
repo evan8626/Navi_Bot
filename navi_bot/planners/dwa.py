@@ -60,9 +60,6 @@ class DWAPlanner:
         elif goal is None:
             logger.warning("Goal is None. Cannot plan.")
             return None
-        elif obstacles is None:
-            logger.warning("Obstacles list is None. Cannot plan.")
-            return None
         
         time_horizon = 2.0
         step_time = 0.1
@@ -89,11 +86,15 @@ class DWAPlanner:
                     positional_info.append((x, y, theta))
                     
                 score = self.score_trajectory(vel, goal, obstacles, positional_info)
+                if score is None:
+                    logger.warning("Score is None. Skipping this trajectory.")
+                    continue
                 kinematics.update({vel: score})
-                
-        pair = max(kinematics, key=kinematics.get)
+        if not kinematics:
+            logger.warning("No valid trajectories found. Cannot plan.")
+            return None
+        best_v, best_omega = max(kinematics, key=kinematics.get)
         
-        best_v, best_omega = pair
         return (best_v, best_omega)
     
     def compute_dynamic_window(self, current_vel, dt):
@@ -137,9 +138,6 @@ class DWAPlanner:
         elif goal is None:
             logger.warning("There is no goal. Cannot score trajectory.")
             return None
-        elif obstacles is None:
-            logger.warning("Provided obstacles list is None. Cannot score trajectory.")
-            return None
         elif pos is None:
             logger.warning("There is no positional information. Cannot score trajectory.")
             return None
@@ -150,13 +148,23 @@ class DWAPlanner:
             x, y, theta = p
             coord = (x, y)
             angle = angle_between_points(coord, goal)
-            for obstacle in obstacles:
-                clear = heuristic(coord, obstacle)
-                clearance_list.append(clear)
+            if obstacles.size == 0:
+                clearance_list.append(10.0)
+            else:
+                for obstacle in obstacles:
+                    clear = heuristic_forward(coord, obstacle)
+                    clearance_list.append(clear)
         _, _, final_theta = pos[-1]
         heading = angle_between_points((pos[-1][0], pos[-1][1]), goal) - final_theta
         heading = normalize_angle(heading)
         heading = abs(heading)
+        if not clearance_list:
+            logger.warning("No clearance information available. Cannot score trajectory.")
+            return None
         clearance = min(clearance_list)
         score = -(self.heading_weight * heading) + (self.clearance_weight * clearance) + (self.velocity_weight * vel[0])
         return score
+    
+def heuristic_forward(pos, goal):
+    """Euclidian distance heuristic."""
+    return np.sqrt((pos[0] - goal[0])**2 + (pos[1] - goal[1])**2)

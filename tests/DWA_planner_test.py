@@ -33,17 +33,14 @@ def get_start_callback(grid):
     idx = np.random.randint(0, len(free_cells))
     return tuple(int(v) for v in free_cells[idx])
 
-def path_is_valid(path, grid):
+def dwa_is_valid(best_vel, best_omega, dwa):
     """
-    Check if the path is valid (not None, not empty, and all cells are free)
+    Check if DWA returned valid velocity commands
     """
-    if path is None or len(path) == 0:
-        return False
-    for cell in path:
-        row, col = cell
-        if row < 0 or row >= grid.shape[0] or col < 0 or col >= grid.shape[1] or grid[row, col] == 1:
-            return False
-    return True
+    if best_vel >= dwa.min_vel_x and best_vel <= dwa.max_vel_x:
+        if abs(best_omega) <= dwa.max_vel_theta:
+            return True
+    return False
 
 # END SETUP METHODS
 
@@ -100,6 +97,69 @@ def test_none_goal():
         current_pose = (start[0], start[1], theta)
     else:
         current_pose = None
+        
+    # linear and angular velocity
+    current_vel = (0.0, 0.0)
+    
+    #goal
+    goal = None
+    
+    # obstacles
+    obstacles = np.argwhere(map1 == 1)
+    
+    path = dwa.plan(current_pose, current_vel, goal, obstacles)
+    
+    if path is None:
+        logger.info("PASS: DWA handled None goal position")
+        return True
+    else:
+        logger.error("FAIL: DWA returned a path even though goal is None")
+        return False
+    
+def test_valid_path():
+    """
+    Test DWA with a valid start and goal position on a clear map
+    """
+    logger.info("TEST 3: Valid Path on Clear Map")
+    dwa = setup_DWA()
+    map1 = clear_map()
+    
+    # current pose
+    start = get_start_callback(map1)
+    theta = 0.0
+    current_pose = ()
+    if (start is not None) and (theta is not None):
+        current_pose = (start[0], start[1], theta)
+    else:
+        current_pose = None
+        
+    # linear and angular velocity
+    current_vel = (1.0, 0.0)
+    
+    #goal
+    goal = test_goal_callback(map1)
+    while goal == start:
+        goal = test_goal_callback(map1)
+        
+    # obstacles
+    obstacles = np.argwhere(map1 == 1)
+    for obs in obstacles:
+        if np.array_equal(obs, start) or np.array_equal(obs, goal):
+            logger.warning("Obstacle coincides with start or goal. Skipping obstacle.")
+            continue
+        
+    pair = dwa.plan(current_pose, current_vel, goal, obstacles)
+    best_vel = 0.0 
+    best_omega = 0.0
+    if(pair is not None):
+        best_vel, best_omega = pair
+    
+    if dwa_is_valid(best_vel, best_omega, dwa):
+        logger.info("PASS: DWA returned valid velocity commands")
+        return True
+    else:
+        logger.error("FAIL: DWA returned an invalid path")
+        return False
 
 # MARK: Maps
 
@@ -170,6 +230,8 @@ def main():
     results = []
     
     results.append(test_none_start())
+    results.append(test_none_goal())
+    results.append(test_valid_path() )
     
     logger.info(f"Results: {sum(results)}/{len(results)} passed")
     logger.info("All tests complete.")
