@@ -70,6 +70,14 @@ navi_bot
         |
         ---- pure_pursuit.py - implements pure pursuit algorithm to determine how fast to follow path.
     |
+    planners
+        |
+        ---- astar.py - A* global path planning algorithm
+        |
+        ---- dstar_lite.py - D* Lite local path planning algorithm
+        |
+        ---- dwa.py - Dynamic Approach Window local path planning algorithm
+    |
     sensors
         |
         ---- imu_processor.py - initializes IMU and reads IMU sensor data.
