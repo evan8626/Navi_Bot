@@ -336,6 +336,7 @@ def main():
     
     logger.info(f"Results: {sum(results)}/{len(results)} passed")
     logger.info("All tests complete.")
+    sys.exit(0 if all(results) else 1)
     
 if __name__ == '__main__':
     main()
