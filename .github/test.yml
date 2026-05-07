@@ -1,22 +1,18 @@
 name: Run Tests
 
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+on: [push]
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: Windows-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.14.4'
 
       - name: Install dependencies
         run: |
