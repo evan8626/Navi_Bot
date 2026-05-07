@@ -20,6 +20,7 @@ from navi_bot.mock_ros2 import init, shutdown, spin
 
 from enum import Enum, auto
 
+# MARK: Robot State Enum
 class RobotState(Enum):
     """Robot operational states."""
     IDLE = auto()
@@ -33,6 +34,7 @@ class RobotState(Enum):
     CHARGING = auto()
     ERROR = auto()
 
+# MARK: Mission Class
 class Mission:
     """
     Represents a delivery mission.
@@ -52,6 +54,7 @@ class Mission:
         self.delivery_location = delivery_location
         self.status = 'pending'
 
+# MARK: State Machine Node
 class StateMachine(Node):
     """
     State machine for mission planning and execution.
@@ -63,6 +66,7 @@ class StateMachine(Node):
     - Error conditions
     """
 
+    # MARK: Initialization
     def __init__(self):
         super().__init__('state_machine')
 
@@ -111,11 +115,13 @@ class StateMachine(Node):
 
         self.get_logger().info('State Machine initialized')
 
+    # MARK: Add Mission
     def add_mission(self, mission):
         """Add a mission to the queue"""
         self.mission_queue.append(mission)
         self.get_logger().info(f'Added mission {mission.mission_id}')
     
+    # MARK: Nav Status
     def nav_status_callback(self, msg):
         """Update navigation status."""
         if msg.data == 'goal_reached':
@@ -123,6 +129,7 @@ class StateMachine(Node):
         elif msg.data == 'error':
             self.has_error = True
 
+    # MARK: Update State
     def update_state_machine(self):
         """
         State machine update logic.
@@ -154,6 +161,7 @@ class StateMachine(Node):
             self.get_logger().info(
                 f'State transition: {self.previous_state.name} -> {self.current_state.name}')
 
+    # MARK: IDLE
     def handle_idle_state(self):
         """Handle IDLE state logic"""
         
@@ -176,6 +184,7 @@ class StateMachine(Node):
         elif self.current_mission.status == 'picked_up':
             self.transition_state(RobotState.DELIVERY_NAV)
 
+    # MARK: NAV TO PICKUP
     def handle_navigating_to_pickup(self):
         """Handle PICK_NAV state logic"""
         self.current_mission.status = 'navigating'
@@ -188,6 +197,7 @@ class StateMachine(Node):
             self.current_mission.status = 'picking_up'
             self.transition_state(RobotState.PICKING_UP)
 
+    # MARK: PICKING UP
     def handle_picking_up(self):
         """Handle PICKING_UP state logic"""
         if not self._pickup_timer_started:
@@ -206,13 +216,15 @@ class StateMachine(Node):
     def _pickup_done(self):
         self.pickup_complete = True
     
+    # MARK: NAV TO DELIVERY
     def handle_navigating_to_delivery(self):
         """Handle DELIVERY_NAV state logic"""
         self.current_mission.status = 'navigating'
         if self.is_at_goal:
             self.current_mission.status = 'delivering'
             self.transition_state(RobotState.DELIVERING)
-        
+    
+    # MARK: DELIVERING
     def handle_delivery(self):
         """Handle DELIVERING state logic"""
         if not self._delivery_timer_started:
@@ -231,6 +243,7 @@ class StateMachine(Node):
     def _delivery_done(self):
         self.delivery_complete = True
 
+    # MARK: CHARGING
     def handle_charging(self):
         """Handle CHARGING state logic"""
         if self.battery_level <= self.min_mission_threshold:
@@ -263,7 +276,8 @@ class StateMachine(Node):
         else:
             # Unknown state/Error
             self.transition_state(RobotState.ERROR)
-        
+    
+    # MARK: ERROR HANDLING
     def handle_error_state(self):
         """Handle ERROR state logic"""
         self.get_logger().error(
@@ -274,12 +288,13 @@ class StateMachine(Node):
         self.has_error = False
         self.transition_state(RobotState.IDLE)
     
+    # MARK: STATE TRANSITION
     def transition_state(self, state):
         """Handles state transition"""
         self.previous_state = self.current_state
         self.current_state = state
         
-
+# MARK: Main
 def main(args=None):
     rclpy.init(args=args)
     state_machine = StateMachine()

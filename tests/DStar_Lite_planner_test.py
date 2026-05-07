@@ -45,10 +45,7 @@ def path_is_valid(path, grid):
             return False
     return True
 
-# END SETUP METHODS
-
-# MARK: Test Methods
-
+# MARK: No Start
 def test_none_start():
     """
     Test D* Lite with None start position
@@ -68,7 +65,8 @@ def test_none_start():
     except Exception as e:
         logger.error(f"Test None Start: Failed with error {e}\n")
         return False
-    
+
+# MARK: No Goal
 def test_none_goal():
     """
     Test D* Lite with None goal position
@@ -89,6 +87,7 @@ def test_none_goal():
         logger.error(f"Test None Goal: Failed with error {e}\n")
         return False
 
+# MARK: Invalid Start Coords
 def test_invalid_start():
     """
     Test D* Lite with invalid start position
@@ -108,7 +107,8 @@ def test_invalid_start():
     except Exception as e:
         logger.error(f"Test Invalid Start: Failed with error {e}\n")
         return False
-    
+
+# MARK: Invalid Goal Coords  
 def test_invalid_goal():
     """
     Test D* Lite with invalid goal position
@@ -128,7 +128,8 @@ def test_invalid_goal():
     except Exception as e:
         logger.error(f"Test Invalid Goal: Failed with error {e}\n")
         return False
-    
+
+# MARK: At Goal  
 def test_already_at_goal():
     """
     Test D* Lite when start and goal are the same
@@ -151,7 +152,8 @@ def test_already_at_goal():
     except Exception as e:
         logger.error(f"Test Already at Goal: Failed with error {e}\n")
         return False
-    
+
+# MARK: Blocked Map
 def test_blocked_map():
     """
     Blocked map, no path available.
@@ -175,7 +177,8 @@ def test_blocked_map():
     except Exception as e:
         logger.error(f"Test Blocked Map: Failed with error {e}\n")
         return False
-    
+
+# MARK: Coords on Open   
 def test_random_coords_clear_map():
     """
     Clear map with randomly generated start and goal coordinates.
@@ -199,7 +202,8 @@ def test_random_coords_clear_map():
     except Exception as e:
         logger.error(f"Test Random Coords on Clear Map: Failed with error {e}\n")
         return False
-    
+
+# MARK: Coords on Obstacle    
 def test_random_coords_obstacle_map():
     """
     Obstacle map with randomly generated start and goal coordinates.
@@ -224,7 +228,8 @@ def test_random_coords_obstacle_map():
     except Exception as e:
         logger.error(f"Test Random Coords on Obstacle Map: Failed with error {e}\n")
         return False
-    
+
+# MARK: Coords on Dynamic  
 def test_random_coords_on_moving_map():
     """
     Randomly generated start and goal coords, with changing map
@@ -253,7 +258,6 @@ def test_random_coords_on_moving_map():
         return False
 
 # MARK: Maps
-
 def clear_map():
     """
     Obstacle-less map

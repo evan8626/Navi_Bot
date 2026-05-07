@@ -53,8 +53,7 @@ def test_none_start():
         logger.warning("FAIL")
         return passed
 
-# MARK: Test Methods
- 
+# MARK: No Start
 def test_none_goal():
     """Test 2: None goal coordinates"""
     passed = False
@@ -75,7 +74,8 @@ def test_none_goal():
         logger.warning(f"Goal is {goal}, but tester returned {tester}")
         logger.warning("FAIL")
         return passed
-        
+
+# MARK: Invalid Start Coords   
 def test_invalid_start():
     """Test 3: Invalid start coordinates"""
     passed = False
@@ -97,7 +97,8 @@ def test_invalid_start():
         logger.warning(f"Starting coords are: {start[0]}, {start[1]}, but tester returned {tester}")
         logger.warning("FAIL")
         return passed
-    
+
+# MARK: Invalid Goal Coords  
 def test_invalid_goal():
     """Test 4: Invalid goal coordinates"""
     passed = False
@@ -119,7 +120,8 @@ def test_invalid_goal():
         logger.warning(f"Goal coords are: {goal[0]}, {goal[1]}, but tester returned {tester}")
         logger.warning("FAIL")
         return passed
-    
+
+# MARK: At Goal
 def test_already_at_goal():
     """Test 5: Start and goal coordinates are the same"""
     passed = False
@@ -140,7 +142,8 @@ def test_already_at_goal():
         logger.warning("Path still created even though start and goal are the same.")
         logger.warning("FAIL")
         return passed
-    
+
+# MARK: Blocked Map  
 def test_blocked_map():
     """Blocked map, no path available."""
     logger.info("TEST 6: Entire map is blocked.")
@@ -163,7 +166,8 @@ def test_blocked_map():
         logger.warning("Fully occupied map still returned a path")
         logger.warning("FAIL")
         return passed
-    
+
+# MARK: Straight Line Clear    
 def test_straight_line_clear():
     """Straight across the top of the 8x8 empty map"""
     passed = False
@@ -187,7 +191,8 @@ def test_straight_line_clear():
         passed = True
         return passed
     return passed
-    
+
+# MARK: Diagonal Clear    
 def test_diagonal_clear():
     """Straight diagonal through the middle of the 8x8 empty map"""
     passed = False
@@ -211,7 +216,8 @@ def test_diagonal_clear():
         passed = True
         return passed
     return passed
-    
+
+# MARK: Staggered Clear    
 def test_staggered_clear():
     """Staggered x, y across 8x8 map"""
     passed = False
@@ -235,7 +241,8 @@ def test_staggered_clear():
         passed = True
         return passed
     return passed
-    
+
+# MARK: Straight Line Obst   
 def test_straight_line_obstacle():
     """Straight line to goal, but obstacle in the way"""
     passed = False
@@ -259,7 +266,8 @@ def test_straight_line_obstacle():
         passed = True
         return passed
     return passed
-    
+
+# MARK: Diagonal Obst   
 def test_diagonal_obstacle():
     """Diagonal straight across map, with obstacles in the way"""
     passed = False
@@ -283,7 +291,8 @@ def test_diagonal_obstacle():
         passed = True
         return passed
     return passed
-    
+
+# MARK: Staggered Obst  
 def test_staggered_obstacle():
     """Testing a more complex goal arrangement on obstacle map"""
     passed = False
