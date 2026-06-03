@@ -60,7 +60,7 @@ class DifferentialDriveKinematics:
         Returns:
             (v, omega): Linear and angular velocity
         """
-        v = (v_left, v_right) / 2.0
+        v = (v_left + v_right) / 2.0
         omega = (v_right - v_left) / self.L
 
         return v, omega
@@ -93,9 +93,9 @@ class DifferentialDriveKinematics:
             R = v / omega # Radius of curvature
             dtheta = omega * dt
             dx = R * (np.sin(theta + dtheta) - np.sin(theta))
-            dy = R * (-np.sin(theta + dtheta) + np.cos(theta))
+            dy = R * (-np.cos(theta + dtheta) + np.cos(theta))
 
-        return dx, dy, theta
+        return dx, dy, dtheta
 
     def validate_velocities(self, v, omega):
         """
@@ -103,7 +103,8 @@ class DifferentialDriveKinematics:
 
         Returns: True if valid, False otherwise
         """
-        v_left, v_right = self.inverse_kinematics(v, omega)
+        v_left = v - (omega * self.L / 2.0)
+        v_right = v + (omega * self.L / 2.0)
         max_v = self.max_wheel_speed * self.r
         
         return abs(v_left) <= max_v and abs(v_right) <= max_v
