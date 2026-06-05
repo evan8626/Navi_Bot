@@ -45,7 +45,7 @@ class WheelOdometry:
         self.linear_velocity = 0.0
         self.angular_velocity = 0.0
 
-    def update(self, left_ticks, right_ticks):
+    def update(self, left_ticks, right_ticks, dt):
         """
         Update pose estimate from encoder readings.
 

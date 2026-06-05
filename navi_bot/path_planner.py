@@ -45,6 +45,7 @@ class PathPlannerNode(Node):
         # Planning state
         self.current_path = None
         self.current_goal = None
+        self.current_pose = None
         self.replanning_needed = False
         
         # Timing
@@ -54,6 +55,7 @@ class PathPlannerNode(Node):
         # Subscribers
         self.goal_sub = self.create_subscription(Pose2D, '/goal_pose', self.goal_callback, 10)
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
+        self.current_pose_sub = self.create_subscription(Pose2D, '/current_pose', self.current_pose_callback, 10)
         
         # Planning timer (10Hz for global replan checks)
         self.plan_timer = self.create_timer(0.1, self.planning_loop)
@@ -79,6 +81,10 @@ class PathPlannerNode(Node):
         """Handle map updates."""
         self.global_planner.set_occupancy_grid(msg)
         self.DStar_local_planner.set_occupancy_grid(msg)
+    
+    def current_pose_callback(self, msg):
+        """Handle current pose updates."""
+        self.current_pose = (msg.x, msg.y, msg.theta)
         
     def planning_loop(self):
         """
@@ -91,8 +97,10 @@ class PathPlannerNode(Node):
         
         planning_start = time.perf_counter()
         
-        # TODO: Get current robot position
-        start = (0.0, 0.0)
+        if (self.current_pose is None):
+            self.get_logger().warn("Current pose unknown, cannot plan")
+            return
+        start = (int(self.current_pose[0]), int(self.current_pose[1]))
         
         path = self.global_planner.plan(start, self.current_goal)
         
@@ -113,7 +121,7 @@ class PathPlannerNode(Node):
             
         # D Star Lite local replanning
         if not self.dstar_initialized and self.current_goal is not None:
-            self.DStar_local_planner.d_star_initialize(self.dstar_start, self.current_goal)
+            self.DStar_local_planner.d_star_initialize(start, self.current_goal)
             self.dstar_start = start
             self.dstar_last = self.current_goal
             self.dstar_initialized = True
