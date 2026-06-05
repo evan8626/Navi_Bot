@@ -45,7 +45,10 @@ class PurePursuitController:
 
         path_len = len(path)
         if self.waypoint >= path_len:
-            return path[-1] # Returns last coords in path list
+            difference_to_goal = distance(current_pos, path[-1])
+            if difference_to_goal >= path_len + self.lookahead_distance:
+                return None # Path is exhausted
+            return path[-1] # Return last point if lookahead is close enough
         else:
             for i, coord in enumerate(path[self.waypoint:], start=self.waypoint):
                 if(distance(current_pos, coord) >= self.lookahead_distance):

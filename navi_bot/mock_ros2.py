@@ -45,8 +45,8 @@ class Float32:
 
 class String:
     """String message"""
-    def __init__(self):
-        self.data = ""
+    def __init__(self, data=""):
+        self.data = data
 
 class Point:
     """3D point."""
@@ -145,6 +145,26 @@ class Node:
 
     def destroy_node(self):
         self._logger.info(f"Destroying node {self.node_name}")
+    
+    def declare_parameter(self, name, default_value):
+        if not hasattr(self, '_parameters'):
+            self._parameters = {}
+        self._parameters[name] = default_value
+
+    def get_parameter(self, name):
+        value = self._parameters.get(name, None)
+        return MockParameter(value)
+
+class MockParameter:
+    def __init__(self, value):
+        self._value = value
+
+    def get_parameter_value(self):
+        return self
+
+    @property
+    def double_value(self):
+        return float(self._value)
 
 # ==========================================================================
 # Mock ROS2 Functions

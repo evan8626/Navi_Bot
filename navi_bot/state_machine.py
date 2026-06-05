@@ -45,7 +45,7 @@ class Mission:
     'picked_up'   - item is on the robot
     'delivering'  - item is being delivered
     'delivered'   - mission complete/item offloaded
-    'navigating' - robot is going to a goal
+    'navigating'  - robot is going to a goal
     """
     
     def __init__(self, mission_id, pickup_location, delivery_location):
@@ -147,6 +147,8 @@ class StateMachine(Node):
         elif self.current_state == RobotState.PICKING_UP:
             self.handle_picking_up()
         elif self.current_state == RobotState.PICKED_UP:
+            self.transition_state(RobotState.DELIVERY_NAV)
+        elif self.current_state == RobotState.DELIVERY_NAV:
             self.handle_navigating_to_delivery()
         elif self.current_state == RobotState.DELIVERING:
             self.handle_delivery()
