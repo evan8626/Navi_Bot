@@ -19,7 +19,6 @@ setup(
         'setuptools',
         'numpy',
     ],
-    install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Evan Osborn',
     maintainer_email='evan.a.osborn@gmail.com',
