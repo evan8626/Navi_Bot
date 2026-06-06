@@ -117,7 +117,6 @@ class LidarProcessor:
         """
         Update local costmap with obstacle info
 
-        TODO: Implement costmap update with obstacle inflation
         """
         
         grid = np.array(costmap.data).reshape(costmap.height, costmap.width)

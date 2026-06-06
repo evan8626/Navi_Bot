@@ -7,7 +7,7 @@ package_name = 'navi_bot'
 setup(
     name=package_name,
     version='0.1.0',
-    packages=[package_name, f'{package_name}.sensors', f'{package_name}.control', f'{package_name}.utils'],
+    packages=[package_name, f'{package_name}.sensors', f'{package_name}.control', f'{package_name}.utils', f'{package_name}.planners', f'{package_name}.tests'],
     data_files=[
         ('share/ament/resource_index/packages',['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
