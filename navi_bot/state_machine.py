@@ -248,6 +248,9 @@ class StateMachine(Node):
     # MARK: CHARGING
     def handle_charging(self):
         """Handle CHARGING state logic"""
+        if self.mission_queue and self.current_mission is None:
+            self.current_mission = self.mission_queue.pop(0)
+            self.get_logger().info(f"Mission found and assigned, battery level is {self.battery_level}.\n")
         if self.battery_level <= self.min_mission_threshold:
             # Charge 10% above battery low level regardless of if mission is assigned
             # Set this way to prevent immediate return to charging station upon completion of task
@@ -267,7 +270,7 @@ class StateMachine(Node):
             self.get_logger().info("Setting robot to IDLE.\n")
             self.transition_state(RobotState.IDLE)
         
-        elif self.battery_level > self.min_mission_threshold and self.current_mission:
+        elif self.battery_level > self.min_mission_threshold and self.current_mission is not None:
             # Go from charging to mission/NAVIGATION state
             self.get_logger().info(f"Mission assigned, battery level is {self.battery_level}. READY.\n")
             if self.current_mission.status == 'pending' or self.current_mission.status == 'delivered':

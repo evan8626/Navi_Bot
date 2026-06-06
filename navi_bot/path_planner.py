@@ -72,7 +72,7 @@ class PathPlannerNode(Node):
         
     def goal_callback(self, msg):
         """Handle new goal"""
-        self.current_goal = (msg.x, msg.y)
+        self.current_goal = (int(msg.x), int(msg.y))
         self.replanning_needed = True
         self.dstar_initialized = False
         self.get_logger().info(f"New goal received: ({msg.x:.2f}, {msg.y:.2f})")
@@ -84,7 +84,7 @@ class PathPlannerNode(Node):
     
     def current_pose_callback(self, msg):
         """Handle current pose updates."""
-        self.current_pose = (msg.x, msg.y, msg.theta)
+        self.current_pose = (int(msg.x), int(msg.y), msg.theta)
         
     def planning_loop(self):
         """
@@ -122,6 +122,7 @@ class PathPlannerNode(Node):
         # D Star Lite local replanning
         if not self.dstar_initialized and self.current_goal is not None:
             self.DStar_local_planner.d_star_initialize(start, self.current_goal)
+            self.DStar_local_planner.compute_shortest_path(start, self.current_goal, self.DStar_local_planner.occupancy_grid)
             self.dstar_start = start
             self.dstar_last = self.current_goal
             self.dstar_initialized = True
