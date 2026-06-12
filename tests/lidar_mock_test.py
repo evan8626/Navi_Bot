@@ -574,34 +574,51 @@ def test_update_costmap_inflation_is_circular():
 # MARK: Main
 
 def main():
+    tests = [
+        test_process_scan_returns_required_keys,
+        test_process_scan_filters_out_of_range,
+        test_process_scan_closest_obstacle_correct,
+        test_process_scan_clear_scan_no_close_obstacle,
+        test_process_scan_clear_directions_length,
+        test_detect_obstacles_returns_list,
+        test_detect_obstacles_each_has_centroid_and_size,
+        test_detect_obstacles_size_matches_cluster_points,
+        test_detect_obstacles_centroid_near_obstacle,
+        test_detect_obstacles_noise_discarded,
+        test_detect_obstacles_two_separate_clusters,
+        test_clear_directions_all_clear_on_clear_scan,
+        test_clear_directions_blocked_on_close_obstacle,
+        test_clear_directions_window_blocks_neighbors,
+        test_clear_directions_all_blocked_on_blocked_scan,
+        test_clear_directions_inf_ranges_are_clear,
+        test_update_costmap_marks_obstacle_cell,
+        test_update_costmap_inflation_radius,
+        test_update_costmap_no_out_of_bounds,
+        test_update_costmap_multiple_obstacles,
+        test_update_costmap_empty_obstacles_no_change,
+        test_update_costmap_inflation_is_circular,
+    ]
+
+    args = sys.argv[1:]
+    if args and args[0] == '--list':
+        for i, t in enumerate(tests, 1):
+            doc = (t.__doc__ or t.__name__).strip().splitlines()[0]
+            print(f"TEST {i}: {doc}")
+        return
+
+    selected = tests
+    if args:
+        try:
+            n = int(args[0])
+            if not 1 <= n <= len(tests):
+                raise ValueError
+        except ValueError:
+            logger.error(f"Invalid test selector {args[0]!r} — use 1..{len(tests)} or --list")
+            sys.exit(2)
+        selected = [tests[n - 1]]
+
     logger.info("LIDAR Processor Test Suite")
-    results = []
-
-    results.append(test_process_scan_returns_required_keys())
-    results.append(test_process_scan_filters_out_of_range())
-    results.append(test_process_scan_closest_obstacle_correct())
-    results.append(test_process_scan_clear_scan_no_close_obstacle())
-    results.append(test_process_scan_clear_directions_length())
-
-    results.append(test_detect_obstacles_returns_list())
-    results.append(test_detect_obstacles_each_has_centroid_and_size())
-    results.append(test_detect_obstacles_size_matches_cluster_points())
-    results.append(test_detect_obstacles_centroid_near_obstacle())
-    results.append(test_detect_obstacles_noise_discarded())
-    results.append(test_detect_obstacles_two_separate_clusters())
-
-    results.append(test_clear_directions_all_clear_on_clear_scan())
-    results.append(test_clear_directions_blocked_on_close_obstacle())
-    results.append(test_clear_directions_window_blocks_neighbors())
-    results.append(test_clear_directions_all_blocked_on_blocked_scan())
-    results.append(test_clear_directions_inf_ranges_are_clear())
-
-    results.append(test_update_costmap_marks_obstacle_cell())
-    results.append(test_update_costmap_inflation_radius())
-    results.append(test_update_costmap_no_out_of_bounds())
-    results.append(test_update_costmap_multiple_obstacles())
-    results.append(test_update_costmap_empty_obstacles_no_change())
-    results.append(test_update_costmap_inflation_is_circular())
+    results = [t() for t in selected]
 
     logger.info(f"Results: {sum(results)}/{len(results)} passed")
     logger.info("All tests complete.")

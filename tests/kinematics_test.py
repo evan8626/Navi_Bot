@@ -527,35 +527,52 @@ def test_validate_omega_sign_symmetry():
 # MARK: Main
 
 def main():
+    tests = [
+        test_ik_average_equals_linear_velocity,
+        test_ik_speed_difference_encodes_omega,
+        test_ik_rotation_symmetry,
+        test_ik_straight_line_wheels_equal,
+        test_ik_clipping_never_exceeds_limit,
+        test_ik_wider_wheelbase_larger_diff,
+        test_fk_linear_velocity_is_average,
+        test_fk_angular_velocity_from_difference,
+        test_fk_ik_roundtrip,
+        test_fk_equal_speeds_zero_omega,
+        test_fk_opposite_speeds_zero_linear,
+        test_pose_straight_displacement_magnitude,
+        test_pose_straight_direction_matches_heading,
+        test_pose_straight_no_rotation,
+        test_pose_arc_dtheta_equals_omega_dt,
+        test_pose_arc_chord_length,
+        test_pose_arc_heading_independence,
+        test_pose_zero_velocity_no_movement,
+        test_pose_arc_omega_sign_symmetry,
+        test_validate_consistent_with_ik,
+        test_validate_infeasible_command_rejected,
+        test_validate_zero_always_valid,
+        test_validate_omega_sign_symmetry,
+    ]
+
+    args = sys.argv[1:]
+    if args and args[0] == '--list':
+        for i, t in enumerate(tests, 1):
+            doc = (t.__doc__ or t.__name__).strip().splitlines()[0]
+            print(f"TEST {i}: {doc}")
+        return
+
+    selected = tests
+    if args:
+        try:
+            n = int(args[0])
+            if not 1 <= n <= len(tests):
+                raise ValueError
+        except ValueError:
+            logger.error(f"Invalid test selector {args[0]!r} — use 1..{len(tests)} or --list")
+            sys.exit(2)
+        selected = [tests[n - 1]]
+
     logger.info("Differential Drive Kinematics Test Suite")
-    results = []
-
-    results.append(test_ik_average_equals_linear_velocity())
-    results.append(test_ik_speed_difference_encodes_omega())
-    results.append(test_ik_rotation_symmetry())
-    results.append(test_ik_straight_line_wheels_equal())
-    results.append(test_ik_clipping_never_exceeds_limit())
-    results.append(test_ik_wider_wheelbase_larger_diff())
-
-    results.append(test_fk_linear_velocity_is_average())
-    results.append(test_fk_angular_velocity_from_difference())
-    results.append(test_fk_ik_roundtrip())
-    results.append(test_fk_equal_speeds_zero_omega())
-    results.append(test_fk_opposite_speeds_zero_linear())
-
-    results.append(test_pose_straight_displacement_magnitude())
-    results.append(test_pose_straight_direction_matches_heading())
-    results.append(test_pose_straight_no_rotation())
-    results.append(test_pose_arc_dtheta_equals_omega_dt())
-    results.append(test_pose_arc_chord_length())
-    results.append(test_pose_arc_heading_independence())
-    results.append(test_pose_zero_velocity_no_movement())
-    results.append(test_pose_arc_omega_sign_symmetry())
-
-    results.append(test_validate_consistent_with_ik())
-    results.append(test_validate_infeasible_command_rejected())
-    results.append(test_validate_zero_always_valid())
-    results.append(test_validate_omega_sign_symmetry())
+    results = [t() for t in selected]
 
     logger.info(f"Results: {sum(results)}/{len(results)} passed")
     logger.info("All tests complete.")

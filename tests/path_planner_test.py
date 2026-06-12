@@ -601,36 +601,52 @@ def test_dstar_start_set_after_plan():
 # MARK: Main
 
 def main():
+    tests = [
+        test_init_default_state,
+        test_init_dstar_not_initialized,
+        test_goal_callback_sets_goal,
+        test_goal_callback_sets_replanning_needed,
+        test_goal_callback_resets_dstar,
+        test_pose_callback_stores_pose,
+        test_map_callback_sets_grid,
+        test_planning_loop_no_goal_does_nothing,
+        test_planning_loop_no_replanning_does_nothing,
+        test_planning_loop_no_pose_does_nothing,
+        test_planning_finds_path_clear_map,
+        test_planning_path_ends_at_goal,
+        test_planning_path_starts_at_start,
+        test_planning_resets_replanning_flag,
+        test_planning_publishes_path,
+        test_planning_published_path_matches_waypoints,
+        test_planning_finds_path_obstacle_map,
+        test_planning_blocked_map_no_path,
+        test_planning_path_contains_no_obstacles,
+        test_planning_new_goal_triggers_replan,
+        test_planning_pose_update_used_as_start,
+        test_dstar_initialized_after_plan,
+        test_dstar_start_set_after_plan,
+    ]
+
+    args = sys.argv[1:]
+    if args and args[0] == '--list':
+        for i, t in enumerate(tests, 1):
+            doc = (t.__doc__ or t.__name__).strip().splitlines()[0]
+            print(f"TEST {i}: {doc}")
+        return
+
+    selected = tests
+    if args:
+        try:
+            n = int(args[0])
+            if not 1 <= n <= len(tests):
+                raise ValueError
+        except ValueError:
+            logger.error(f"Invalid test selector {args[0]!r} — use 1..{len(tests)} or --list")
+            sys.exit(2)
+        selected = [tests[n - 1]]
+
     logger.info("Path Planner Node Test Suite")
-    results = []
-
-    results.append(test_init_default_state())
-    results.append(test_init_dstar_not_initialized())
-
-    results.append(test_goal_callback_sets_goal())
-    results.append(test_goal_callback_sets_replanning_needed())
-    results.append(test_goal_callback_resets_dstar())
-    results.append(test_pose_callback_stores_pose())
-    results.append(test_map_callback_sets_grid())
-
-    results.append(test_planning_loop_no_goal_does_nothing())
-    results.append(test_planning_loop_no_replanning_does_nothing())
-    results.append(test_planning_loop_no_pose_does_nothing())
-
-    results.append(test_planning_finds_path_clear_map())
-    results.append(test_planning_path_ends_at_goal())
-    results.append(test_planning_path_starts_at_start())
-    results.append(test_planning_resets_replanning_flag())
-    results.append(test_planning_publishes_path())
-    results.append(test_planning_published_path_matches_waypoints())
-    results.append(test_planning_finds_path_obstacle_map())
-    results.append(test_planning_blocked_map_no_path())
-    results.append(test_planning_path_contains_no_obstacles())
-    results.append(test_planning_new_goal_triggers_replan())
-    results.append(test_planning_pose_update_used_as_start())
-
-    results.append(test_dstar_initialized_after_plan())
-    results.append(test_dstar_start_set_after_plan())
+    results = [t() for t in selected]
 
     logger.info(f"Results: {sum(results)}/{len(results)} passed")
     logger.info("All tests complete.")

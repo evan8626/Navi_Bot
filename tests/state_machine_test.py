@@ -790,53 +790,64 @@ def test_nav_status_callback_sets_error():
 # MARK: Main
 
 def main():
+    tests = [
+        test_init_state_is_idle,
+        test_init_mission_queue_empty,
+        test_init_battery_full,
+        test_init_no_error_flags,
+        test_add_mission_appends_to_queue,
+        test_mission_initial_status_pending,
+        test_idle_empty_queue_stays_idle,
+        test_idle_low_battery_transitions_to_charging,
+        test_idle_with_mission_transitions_to_pick_nav,
+        test_idle_pops_mission_from_queue,
+        test_idle_picked_up_mission_transitions_to_delivery_nav,
+        test_pick_nav_sets_mission_status_navigating,
+        test_pick_nav_publishes_goal,
+        test_pick_nav_at_goal_transitions_to_picking_up,
+        test_pick_nav_not_at_goal_stays_in_pick_nav,
+        test_picking_up_sets_timer_flag,
+        test_picking_up_completes_on_flag,
+        test_picking_up_mission_status_set,
+        test_picked_up_transitions_to_delivery_nav,
+        test_delivery_nav_at_goal_transitions_to_delivering,
+        test_delivering_completes_on_flag,
+        test_delivering_sets_mission_status_delivered,
+        test_charging_below_min_stays_charging,
+        test_charging_above_min_no_mission_stays_charging,
+        test_charging_above_max_no_mission_transitions_to_idle,
+        test_charging_with_pending_mission_transitions_to_pick_nav,
+        test_charging_with_picked_up_mission_transitions_to_delivery_nav,
+        test_error_flag_triggers_error_state,
+        test_error_resets_to_idle,
+        test_transition_state_updates_current_state,
+        test_transition_state_records_previous_state,
+        test_state_published_on_transition,
+        test_no_publish_when_state_unchanged,
+        test_nav_status_callback_sets_at_goal,
+        test_nav_status_callback_sets_error,
+    ]
+
+    args = sys.argv[1:]
+    if args and args[0] == '--list':
+        for i, t in enumerate(tests, 1):
+            doc = (t.__doc__ or t.__name__).strip().splitlines()[0]
+            print(f"TEST {i}: {doc}")
+        return
+
+    selected = tests
+    if args:
+        try:
+            n = int(args[0])
+            if not 1 <= n <= len(tests):
+                raise ValueError
+        except ValueError:
+            logger.error(f"Invalid test selector {args[0]!r} — use 1..{len(tests)} or --list")
+            sys.exit(2)
+        selected = [tests[n - 1]]
+
     logger.info("State Machine Test Suite")
-    results = []
-
-    results.append(test_init_state_is_idle())
-    results.append(test_init_mission_queue_empty())
-    results.append(test_init_battery_full())
-    results.append(test_init_no_error_flags())
-
-    results.append(test_add_mission_appends_to_queue())
-    results.append(test_mission_initial_status_pending())
-
-    results.append(test_idle_empty_queue_stays_idle())
-    results.append(test_idle_low_battery_transitions_to_charging())
-    results.append(test_idle_with_mission_transitions_to_pick_nav())
-    results.append(test_idle_pops_mission_from_queue())
-    results.append(test_idle_picked_up_mission_transitions_to_delivery_nav())
-
-    results.append(test_pick_nav_sets_mission_status_navigating())
-    results.append(test_pick_nav_publishes_goal())
-    results.append(test_pick_nav_at_goal_transitions_to_picking_up())
-    results.append(test_pick_nav_not_at_goal_stays_in_pick_nav())
-
-    results.append(test_picking_up_sets_timer_flag())
-    results.append(test_picking_up_completes_on_flag())
-    results.append(test_picking_up_mission_status_set())
-
-    results.append(test_picked_up_transitions_to_delivery_nav())
-    results.append(test_delivery_nav_at_goal_transitions_to_delivering())
-
-    results.append(test_delivering_completes_on_flag())
-    results.append(test_delivering_sets_mission_status_delivered())
-
-    results.append(test_charging_below_min_stays_charging())
-    results.append(test_charging_above_min_no_mission_stays_charging())
-    results.append(test_charging_above_max_no_mission_transitions_to_idle())
-    results.append(test_charging_with_pending_mission_transitions_to_pick_nav())
-    results.append(test_charging_with_picked_up_mission_transitions_to_delivery_nav())
-
-    results.append(test_error_flag_triggers_error_state())
-    results.append(test_error_resets_to_idle())
-
-    results.append(test_transition_state_updates_current_state())
-    results.append(test_transition_state_records_previous_state())
-    results.append(test_state_published_on_transition())
-    results.append(test_no_publish_when_state_unchanged())
-    results.append(test_nav_status_callback_sets_at_goal())
-    results.append(test_nav_status_callback_sets_error())
+    results = [t() for t in selected]
 
     logger.info(f"Results: {sum(results)}/{len(results)} passed")
     logger.info("All tests complete.")

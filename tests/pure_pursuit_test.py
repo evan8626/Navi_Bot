@@ -437,28 +437,46 @@ def test_pure_pursuit_symmetric_paths():
 # MARK: Main
 
 def main():
+    tests = [
+        test_init_lookahead_within_limit,
+        test_init_lookahead_clamped_to_max,
+        test_init_linear_velocity_within_limit,
+        test_init_linear_velocity_clamped_to_max,
+        test_init_waypoint_starts_at_zero,
+        test_lookahead_point_is_at_least_lookahead_distance_away,
+        test_lookahead_returns_last_point_when_waypoint_exhausted,
+        test_lookahead_waypoint_index_advances,
+        test_lookahead_larger_distance_returns_farther_point,
+        test_pure_pursuit_linear_velocity_unchanged,
+        test_pure_pursuit_facing_goal_omega_near_zero,
+        test_pure_pursuit_left_turn_positive_omega,
+        test_pure_pursuit_right_turn_negative_omega,
+        test_pure_pursuit_larger_alpha_larger_omega,
+        test_pure_pursuit_exhausted_path_returns_zero,
+        test_pure_pursuit_omega_bounded_by_curvature_formula,
+        test_pure_pursuit_symmetric_paths,
+    ]
+
+    args = sys.argv[1:]
+    if args and args[0] == '--list':
+        for i, t in enumerate(tests, 1):
+            doc = (t.__doc__ or t.__name__).strip().splitlines()[0]
+            print(f"TEST {i}: {doc}")
+        return
+
+    selected = tests
+    if args:
+        try:
+            n = int(args[0])
+            if not 1 <= n <= len(tests):
+                raise ValueError
+        except ValueError:
+            logger.error(f"Invalid test selector {args[0]!r} — use 1..{len(tests)} or --list")
+            sys.exit(2)
+        selected = [tests[n - 1]]
+
     logger.info("Pure Pursuit Controller Test Suite")
-    results = []
-
-    results.append(test_init_lookahead_within_limit())
-    results.append(test_init_lookahead_clamped_to_max())
-    results.append(test_init_linear_velocity_within_limit())
-    results.append(test_init_linear_velocity_clamped_to_max())
-    results.append(test_init_waypoint_starts_at_zero())
-
-    results.append(test_lookahead_point_is_at_least_lookahead_distance_away())
-    results.append(test_lookahead_returns_last_point_when_waypoint_exhausted())
-    results.append(test_lookahead_waypoint_index_advances())
-    results.append(test_lookahead_larger_distance_returns_farther_point())
-
-    results.append(test_pure_pursuit_linear_velocity_unchanged())
-    results.append(test_pure_pursuit_facing_goal_omega_near_zero())
-    results.append(test_pure_pursuit_left_turn_positive_omega())
-    results.append(test_pure_pursuit_right_turn_negative_omega())
-    results.append(test_pure_pursuit_larger_alpha_larger_omega())
-    results.append(test_pure_pursuit_exhausted_path_returns_zero())
-    results.append(test_pure_pursuit_omega_bounded_by_curvature_formula())
-    results.append(test_pure_pursuit_symmetric_paths())
+    results = [t() for t in selected]
 
     logger.info(f"Results: {sum(results)}/{len(results)} passed")
     logger.info("All tests complete.")

@@ -2,6 +2,7 @@
 
 import numpy as np
 import logging
+import sys
 
 from navi_bot.planners.dwa import DWAPlanner
 
@@ -53,6 +54,36 @@ def dwa_is_valid(best_vel, best_omega, dwa):
         if abs(best_omega) <= dwa.max_vel_theta:
             return True
     return False
+
+def navigate_closed_loop(dwa, start, theta, goal, obstacles, max_replans=60, tol=0.7):
+    """
+    Drive the robot with repeated DWA plans (closed loop) until it reaches
+    the goal, re-validating every velocity command against the limits.
+    Each chosen command is integrated for one 0.5 s control period before
+    replanning. Returns (reached, commands_valid, replans, final_pose).
+    """
+    x, y, th = float(start[0]), float(start[1]), float(theta)
+    v, om = 0.0, 0.0
+    commands_valid = True
+    logger.info(f"Start: ({start[0]}, {start[1]}), Goal: ({goal[0]}, {goal[1]})")
+    for i in range(max_replans):
+        logger.info(f"pose=({x:.2f},{y:.2f})")
+        if np.hypot(goal[0] - x, goal[1] - y) <= tol:
+            return True, commands_valid, i, (x, y)
+        pair = dwa.plan((x, y, th), (v, om), goal, obstacles)
+        if pair is None:
+            logger.warning("Planner returned None mid-route.")
+            return False, commands_valid, i, (x, y)
+        v, om = pair
+        if not dwa_is_valid(v, om, dwa):
+            logger.warning(f"Invalid command v={v:.3f}, omega={om:.3f} at replan {i}")
+            commands_valid = False
+        for _ in range(5):  # integrate one control period (5 x 0.1 s)
+            x += v * np.cos(th) * 0.1
+            y += v * np.sin(th) * 0.1
+            th += om * 0.1
+    logger.warning(f"Did not reach goal after {max_replans} replans.")
+    return False, commands_valid, max_replans, (x, y)
 
 # END SETUP METHODS
 
@@ -175,146 +206,108 @@ def test_fully_blocked():
         logger.error("FAIL: DWA returned a path even though map is fully blocked")
         return False
 
-# MARK: Valid Path Empty Map
+# MARK: Closed-Loop Empty Map
 def test_valid_path():
     """
-    Test DWA with a valid start and goal position on a clear map
+    Closed-loop navigation to a goal on a clear map — every velocity
+    command must stay within limits and the robot must reach the goal.
     """
-    logger.info("TEST 4: Valid Path on Clear Map")
+    logger.info("TEST 4: Closed-Loop Navigation on Clear Map")
     dwa = setup_DWA()
     map1 = clear_map()
-    
-    # current pose
+
     start = get_start_callback(map1)
     theta = 0.0
-    current_pose = ()
-    if (start is not None) and (theta is not None):
-        current_pose = (start[0], start[1], theta)
-    else:
-        current_pose = None
-        
-    # linear and angular velocity
-    current_vel = (1.0, 0.0)
-    
-    #goal
+
     goal = test_goal_callback(map1)
     if goal:
         while goal == start:
             goal = test_goal_callback(map1)
-        
-    # obstacles
-    obstacles = np.argwhere(map1 == 1)
-    for obs in obstacles:
-        if np.array_equal(obs, start) or np.array_equal(obs, goal):
-            logger.warning("Obstacle coincides with start or goal. Skipping obstacle.")
-            continue
-        
-    pair = dwa.plan(current_pose, current_vel, goal, obstacles)
-    best_vel = 0.0 
-    best_omega = 0.0
-    if(pair is not None):
-        best_vel, best_omega = pair
-    
-    if dwa_is_valid(best_vel, best_omega, dwa):
-        logger.info("PASS: DWA returned valid velocity commands")
-        return True
-    else:
-        logger.error("FAIL: DWA returned an invalid path")
-        return False
 
-# MARK: Valid Path Static Obstacles
+    obstacles = np.argwhere(map1 == 1)
+
+    reached, commands_valid, replans, final_pose = navigate_closed_loop(
+        dwa, start, theta, goal, obstacles
+    )
+
+    if reached and commands_valid:
+        logger.info(f"PASS: reached goal in {replans} replans, all commands within limits")
+        return True
+    if not commands_valid:
+        logger.error("FAIL: DWA produced out-of-limit velocity commands")
+    else:
+        logger.error(f"FAIL: robot did not reach goal, final pose ({final_pose[0]:.2f}, {final_pose[1]:.2f})")
+    return False
+
+# MARK: Closed-Loop Static Obstacles
 def test_valid_path_obstacles():
     """
-    Test DWA with a valid start and goal position on an obstacle-filled map
+    Closed-loop navigation on the obstacle map — every velocity command
+    must stay within limits and the robot must reach the goal while
+    avoiding obstacles.
+
+    Fixed start/goal so the test is deterministic: (0,0) -> (4,7) has a
+    clear route down column 0 and along the fully-free row 4, with at
+    least one cell of clearance the whole way. Acts as the acceptance
+    test for the dwa.py clearance-scoring fix — the current scoring lets
+    clearance dominate progress, so the robot stalls near its start.
     """
-    logger.info("TEST 5: Valid Path on obstacle Map")
+    logger.info("TEST 5: Closed-Loop Navigation on Obstacle Map")
     dwa = setup_DWA()
     map1 = obstacle_map()
-    
-    # current pose
-    start = get_start_callback(map1)
-    theta = 0.0
-    current_pose = ()
-    if (start is not None) and (theta is not None):
-        current_pose = (start[0], start[1], theta)
-    else:
-        current_pose = None
-        
-    # linear and angular velocity
-    current_vel = (1.0, 0.0)
-    
-    #goal
-    goal = test_goal_callback(map1)
-    if goal:
-        while goal == start:
-            goal = test_goal_callback(map1)
-        
-    # obstacles
+
+    start = (0, 0)
+    theta = 0.0  # facing +row, roughly toward the route down column 0
+    goal = (4, 7)
+
     obstacles = np.argwhere(map1 == 1)
-    for obs in obstacles:
-        if np.array_equal(obs, start) or np.array_equal(obs, goal):
-            logger.warning("Obstacle coincides with start or goal. Skipping obstacle.")
-            continue
-        
-    pair = dwa.plan(current_pose, current_vel, goal, obstacles)
-    best_vel = 0.0 
-    best_omega = 0.0
-    if(pair is not None):
-        best_vel, best_omega = pair
-    
-    if dwa_is_valid(best_vel, best_omega, dwa):
-        logger.info("PASS: DWA returned valid velocity commands")
+
+    reached, commands_valid, replans, final_pose = navigate_closed_loop(
+        dwa, start, theta, goal, obstacles
+    )
+
+    if reached and commands_valid:
+        logger.info(f"PASS: reached goal in {replans} replans, all commands within limits")
         return True
+    if not commands_valid:
+        logger.error("FAIL: DWA produced out-of-limit velocity commands")
     else:
-        logger.error("FAIL: DWA returned an invalid path")
-        return False
+        logger.error(f"FAIL: robot did not reach goal, final pose ({final_pose[0]:.2f}, {final_pose[1]:.2f})")
+    return False
     
-# MARK: Valid Path Facing away from Goal
+# MARK: Closed-Loop Facing away from Goal
 def test_valid_path_facing_away():
     """
-    Test DWA with a valid start and goal position where the robot is initially facing away from the goal
+    Closed-loop navigation on a clear map where the robot starts facing
+    away from the goal — it must turn around, keep every command within
+    limits, and reach the goal.
     """
-    logger.info("TEST 6: Valid Path Facing away from Goal")
+    logger.info("TEST 6: Closed-Loop Navigation Facing away from Goal")
     dwa = setup_DWA()
-    map1 = obstacle_map()
-    
-    # current pose
+    map1 = clear_map()
+
     start = get_start_callback(map1)
-    theta = 1.0
-    current_pose = ()
-    if (start is not None) and (theta is not None):
-        current_pose = (start[0], start[1], theta)
-    else:
-        current_pose = None
-        
-    # linear and angular velocity
-    current_vel = (1.0, 0.0)
-    
-    #goal
+    theta = 3.1  # ~pi: facing away
+
     goal = test_goal_callback(map1)
     if goal:
         while goal == start:
             goal = test_goal_callback(map1)
-        
-    # obstacles
+
     obstacles = np.argwhere(map1 == 1)
-    for obs in obstacles:
-        if np.array_equal(obs, start) or np.array_equal(obs, goal):
-            logger.warning("Obstacle coincides with start or goal. Skipping obstacle.")
-            continue
-        
-    pair = dwa.plan(current_pose, current_vel, goal, obstacles)
-    best_vel = 0.0 
-    best_omega = 0.0
-    if(pair is not None):
-        best_vel, best_omega = pair
-    
-    if dwa_is_valid(best_vel, best_omega, dwa):
-        logger.info("PASS: DWA returned valid velocity commands")
+
+    reached, commands_valid, replans, final_pose = navigate_closed_loop(
+        dwa, start, theta, goal, obstacles
+    )
+
+    if reached and commands_valid:
+        logger.info(f"PASS: turned around and reached goal in {replans} replans, all commands within limits")
         return True
+    if not commands_valid:
+        logger.error("FAIL: DWA produced out-of-limit velocity commands")
     else:
-        logger.error("FAIL: DWA returned an invalid path")
-        return False
+        logger.error(f"FAIL: robot did not reach goal, final pose ({final_pose[0]:.2f}, {final_pose[1]:.2f})")
+    return False
 
 # MARK: Maps
 
@@ -381,16 +374,36 @@ def obstacle_map2():
 # MARK: Main Method
 
 def main():
-    logger.info("D Star Lite Planning Test Suite\n")
-    results = []
-    
-    results.append(test_none_start())
-    results.append(test_none_goal())
-    results.append(test_fully_blocked())
-    results.append(test_valid_path())
-    results.append(test_valid_path_obstacles())
-    results.append(test_valid_path_facing_away())
-    
+    tests = [
+        test_none_start,
+        test_none_goal,
+        test_fully_blocked,
+        test_valid_path,
+        test_valid_path_obstacles,
+        test_valid_path_facing_away,
+    ]
+
+    args = sys.argv[1:]
+    if args and args[0] == '--list':
+        for i, t in enumerate(tests, 1):
+            doc = (t.__doc__ or t.__name__).strip().splitlines()[0]
+            print(f"TEST {i}: {doc}")
+        return
+
+    selected = tests
+    if args:
+        try:
+            n = int(args[0])
+            if not 1 <= n <= len(tests):
+                raise ValueError
+        except ValueError:
+            logger.error(f"Invalid test selector {args[0]!r} — use 1..{len(tests)} or --list")
+            sys.exit(2)
+        selected = [tests[n - 1]]
+
+    logger.info("DWA Planning Test Suite\n")
+    results = [t() for t in selected]
+
     logger.info(f"Results: {sum(results)}/{len(results)} passed")
     logger.info("All tests complete.")
     sys.exit(0 if all(results) else 1)

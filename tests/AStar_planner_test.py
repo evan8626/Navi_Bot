@@ -367,21 +367,41 @@ def obstacle_map():
 #MARK: Main Method
  
 def main():
+    tests = [
+        test_none_start,
+        test_none_goal,
+        test_invalid_start,
+        test_invalid_goal,
+        test_already_at_goal,
+        test_blocked_map,
+        test_straight_line_clear,
+        test_diagonal_clear,
+        test_staggered_clear,
+        test_straight_line_obstacle,
+        test_diagonal_obstacle,
+        test_staggered_obstacle,
+    ]
+
+    args = sys.argv[1:]
+    if args and args[0] == '--list':
+        for i, t in enumerate(tests, 1):
+            doc = (t.__doc__ or t.__name__).strip().splitlines()[0]
+            print(f"TEST {i}: {doc}")
+        return
+
+    selected = tests
+    if args:
+        try:
+            n = int(args[0])
+            if not 1 <= n <= len(tests):
+                raise ValueError
+        except ValueError:
+            logger.error(f"Invalid test selector {args[0]!r} — use 1..{len(tests)} or --list")
+            sys.exit(2)
+        selected = [tests[n - 1]]
+
     logger.info("A Star Planning Test Suite")
-    results = []
-    
-    results.append(test_none_start())
-    results.append(test_none_goal())
-    results.append(test_invalid_start())
-    results.append(test_invalid_goal())
-    results.append(test_already_at_goal())
-    results.append(test_blocked_map())
-    results.append(test_straight_line_clear())
-    results.append(test_diagonal_clear())
-    results.append(test_staggered_clear())
-    results.append(test_straight_line_obstacle())
-    results.append(test_diagonal_obstacle())
-    results.append(test_staggered_obstacle())
+    results = [t() for t in selected]
 
     logger.info(f"Results: {sum(results)}/{len(results)} passed")
     logger.info("All tests complete.")

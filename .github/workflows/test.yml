@@ -23,9 +23,15 @@ jobs:
           python tests/AStar_planner_test.py
           python tests/DStar_Lite_planner_test.py
           python tests/DWA_planner_test.py
+          python tests/geometry_test.py
+          python tests/imu_test.py
           python tests/kinematics_test.py
           python tests/lidar_mock_test.py
+          python tests/motion_controller_test.py
+          python tests/odometry_test.py
           python tests/path_planner_test.py
+          python tests/profiler_test.py
           python tests/pure_pursuit_test.py
           python tests/state_machine_test.py
           python tests/waypoint_nav_test.py
+          python tests/websocket_test.py

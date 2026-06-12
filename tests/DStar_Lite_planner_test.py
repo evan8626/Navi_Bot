@@ -2,6 +2,7 @@
 
 import numpy as np
 import logging
+import sys
 
 from navi_bot.planners.dstar_lite import DStarLitePlanner
 
@@ -194,6 +195,9 @@ def test_random_coords_clear_map():
     try:
         path = d_star.plan(start, goal)
         if path_is_valid(path, map1):
+            logger.info(f"Start: {start}, Goal: {goal}")
+            for coord in path:
+                logger.info(f"X: {coord[0]}, Y: {coord[1]}")
             logger.info("Test Random Coords on Clear Map: Passed\n")
             return True
         else:
@@ -220,6 +224,9 @@ def test_random_coords_obstacle_map():
     try:
         path = d_star.plan(start, goal)
         if path_is_valid(path, map1):
+            logger.info(f"Start: {start}, Goal: {goal} (obstacle map)")
+            for coord in path:
+                logger.info(f"X: {coord[0]}, Y: {coord[1]}")
             logger.info("Test Random Coords on Obstacle Map: Passed\n")
             return True
         else:
@@ -248,6 +255,9 @@ def test_random_coords_on_moving_map():
         path = d_star.plan(start, goal)
         d_star.set_occupancy_grid(map2)
         if path_is_valid(path, map1):
+            logger.info(f"Start: {start}, Goal: {goal} (obstacle map)")
+            for coord in path:
+                logger.info(f"X: {coord[0]}, Y: {coord[1]}")
             logger.info("Test Random Coords on Moving Map: Passed\n")
             return True
         else:
@@ -321,19 +331,39 @@ def obstacle_map2():
 # MARK: Main Method
 
 def main():
+    tests = [
+        test_none_start,
+        test_none_goal,
+        test_invalid_start,
+        test_invalid_goal,
+        test_already_at_goal,
+        test_blocked_map,
+        test_random_coords_clear_map,
+        test_random_coords_obstacle_map,
+        test_random_coords_on_moving_map,
+    ]
+
+    args = sys.argv[1:]
+    if args and args[0] == '--list':
+        for i, t in enumerate(tests, 1):
+            doc = (t.__doc__ or t.__name__).strip().splitlines()[0]
+            print(f"TEST {i}: {doc}")
+        return
+
+    selected = tests
+    if args:
+        try:
+            n = int(args[0])
+            if not 1 <= n <= len(tests):
+                raise ValueError
+        except ValueError:
+            logger.error(f"Invalid test selector {args[0]!r} — use 1..{len(tests)} or --list")
+            sys.exit(2)
+        selected = [tests[n - 1]]
+
     logger.info("D Star Lite Planning Test Suite\n")
-    results = []
-    
-    results.append(test_none_start())
-    results.append(test_none_goal())
-    results.append(test_invalid_start())
-    results.append(test_invalid_goal())
-    results.append(test_already_at_goal())
-    results.append(test_blocked_map())
-    results.append(test_random_coords_clear_map())
-    results.append(test_random_coords_obstacle_map())
-    results.append(test_random_coords_on_moving_map())
-    
+    results = [t() for t in selected]
+
     logger.info(f"Results: {sum(results)}/{len(results)} passed")
     logger.info("All tests complete.")
     sys.exit(0 if all(results) else 1)

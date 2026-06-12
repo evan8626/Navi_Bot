@@ -121,6 +121,10 @@ def navigate_to_waypoint(planner, pursuit, odom, goal, max_steps=MAX_STEPS):
     for step in range(max_steps):
         x, y, theta = odom.get_pose()
 
+        # Periodic pose telemetry so the dashboard can draw the actual route
+        if step % 15 == 0:
+            logger.debug(f"pose=({x:.2f},{y:.2f})")
+
         if distance_to((x, y), goal) <= GOAL_TOLERANCE:
             return True, step, (x, y, theta)
 
@@ -589,17 +593,37 @@ def test_long_running_multi_waypoint_route():
 # ---------------------------------------------------------------------------
 
 def main():
+    tests = [
+        test_single_mission_clear_map,
+        test_single_mission_obstacle_map,
+        test_three_sequential_missions,
+        test_three_missions_obstacle_map,
+        test_low_battery_charges_before_mission,
+        test_error_recovery_during_mission,
+        test_long_running_multi_waypoint_route,
+    ]
+
+    args = sys.argv[1:]
+    if args and args[0] == '--list':
+        for i, t in enumerate(tests, 1):
+            doc = (t.__doc__ or t.__name__).strip().splitlines()[0]
+            print(f"TEST {i}: {doc}")
+        return
+
+    selected = tests
+    if args:
+        try:
+            n = int(args[0])
+            if not 1 <= n <= len(tests):
+                raise ValueError
+        except ValueError:
+            logger.error(f"Invalid test selector {args[0]!r} — use 1..{len(tests)} or --list")
+            sys.exit(2)
+        selected = [tests[n - 1]]
+
     logger.info("Waypoint Navigation Integration Test Suite")
     logger.info("=" * 60)
-    results = []
-
-    results.append(test_single_mission_clear_map())
-    results.append(test_single_mission_obstacle_map())
-    results.append(test_three_sequential_missions())
-    results.append(test_three_missions_obstacle_map())
-    results.append(test_low_battery_charges_before_mission())
-    results.append(test_error_recovery_during_mission())
-    results.append(test_long_running_multi_waypoint_route())
+    results = [t() for t in selected]
 
     logger.info("=" * 60)
     logger.info(f"Results: {sum(results)}/{len(results)} passed")
