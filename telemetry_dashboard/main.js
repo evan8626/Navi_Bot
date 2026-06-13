@@ -35,6 +35,16 @@ app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) creat
 //    'test:done'   { file, code }   — process exit
 //    'test:error'  { file, msg  }   — spawn error
 // ─────────────────────────────────────────────────────────────────────────────
+// Track live test processes so the renderer can stop them
+const runningProcs = {};
+
+ipcMain.on('test:stop', (_event, { file }) => {
+  const proc = runningProcs[file];
+  if (proc) {
+    try { proc.kill(); } catch (e) { /* already gone */ }
+  }
+});
+
 ipcMain.on('test:run', (event, { file, testsDir, testNum }) => {
   const scriptPath = path.join(testsDir, file);
 
@@ -72,8 +82,9 @@ ipcMain.on('test:run', (event, { file, testsDir, testNum }) => {
   };
   streamLines(proc.stdout);
   streamLines(proc.stderr);
-  proc.on('error', (err) => event.sender.send('test:error', { file, msg: err.message }));
-  proc.on('close', (code) => event.sender.send('test:done', { file, code }));
+  runningProcs[file] = proc;
+  proc.on('error', (err) => { delete runningProcs[file]; event.sender.send('test:error', { file, msg: err.message }); });
+  proc.on('close', (code) => { delete runningProcs[file]; event.sender.send('test:done', { file, code }); });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

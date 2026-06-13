@@ -690,6 +690,7 @@ const TEST_FILES=[
   {file:'state_machine_test.py',      label:'State machine',   sub:'state_machine.py',        status:'ready'},
   {file:'lidar_mock_test.py',         label:'LIDAR',           sub:'sensors/lidar_processing.py', status:'ready'},
   {file:'waypoint_nav_test.py',       label:'Waypoint nav',    sub:'integration (20×20)',     status:'ready'},
+  {file:'astar_dwa_integration_test.py', label:'A* + DWA nav', sub:'integration (global+local)', status:'ready'},
   {file:'motion_controller_test.py',  label:'Motion controller', sub:'control/motion_controller.py', status:'ready'},
   {file:'odometry_test.py',           label:'Odometry',        sub:'sensors/odometry.py',     status:'ready'},
   {file:'imu_test.py',                label:'IMU',             sub:'sensors/imu_processor.py', status:'ready'},
@@ -704,6 +705,10 @@ const runResults={};
 // so individual tests can be run/re-run without losing the others' results.
 const suiteCases={};
 let selectedFile=null, selectedCaseIdx=null, testsDir=null, activeRun=null, activeRunTest=null;
+// liveFollow: grid preview tracks the streaming case in real time; cleared
+// when the user clicks a different case row. stopRequested: a user stop is
+// in flight, so the eventual non-zero exit isn't treated as a failure.
+let liveFollow=true, stopRequested=false;
 
 function ensureSuiteCases(file) { return suiteCases[file]=(suiteCases[file]||[]); }
 // Docstrings often repeat "TEST n:" — drop the redundant inner prefix
@@ -723,8 +728,9 @@ function computeSuiteBadge(file) {
   const r=runResults[file];
   const arr=suiteCases[file]||[];
   const verdicts=arr.filter(c=>c.passed!==null);
-  // crashed (non-zero exit) without any parsed FAIL still means failure
-  if (r&&r.exit!==null&&r.exit!==0&&!verdicts.some(c=>c.passed===false)) return 'fail';
+  // crashed (non-zero exit) without any parsed FAIL still means failure —
+  // unless the user stopped the run themselves
+  if (r&&!r.stopped&&r.exit!==null&&r.exit!==0&&!verdicts.some(c=>c.passed===false)) return 'fail';
   if (!verdicts.length) return null;
   if (verdicts.some(c=>c.passed===false)) return 'fail';
   if (verdicts.length===arr.length) return 'pass';
@@ -767,6 +773,7 @@ function selectFile(file) {
   document.getElementById('output-title').textContent=tf?tf.label:file;
   document.getElementById('output-title').style.color='';
   document.getElementById('run-btn-test').disabled=false;
+  document.getElementById('run-btn-test').textContent=activeRun?'Stop':'Run suite';
   const result=runResults[file];
   if (result&&result.lines.length>0) {
     renderOutput(file); renderCaseList(file);
@@ -802,7 +809,11 @@ function renderCaseList(file) {
     row.innerHTML=`<div class="tc-name" title="${esc(name)}">${esc(name)}</div>`+
       `<button class="tc-run" title="Run this test only"${activeRun?' disabled':''}>run</button>`+
       `<div class="tc-dot ${dc}"></div>`;
-    row.onclick=()=>showCase(file,i);
+    row.onclick=()=>{
+      // clicking the streaming case resumes live-follow; any other row pauses it
+      liveFollow=(activeRun===file&&i===streamingCaseIdx(file));
+      showCase(file,i);
+    };
     row.querySelector('.tc-run').onclick=(e)=>{ e.stopPropagation(); startRun(file,null,c.num); };
     el.appendChild(row);
   });
@@ -824,6 +835,37 @@ async function loadCaseList(file) {
     }
     if (selectedFile===file) renderCaseList(file);
   }
+}
+
+// Index (in suiteCases) of the case currently being streamed by a run
+function streamingCaseIdx(file) {
+  const result=runResults[file];
+  if (!result||!result.cases||!result.cases.length) return -1;
+  const m=result.cases[result.cases.length-1].header.match(/^TEST\s+(\d+)/i);
+  if (!m) return -1;
+  const num=parseInt(m[1],10);
+  return (suiteCases[file]||[]).findIndex(c=>c.num===num);
+}
+
+// Redraw the grid with the streaming case's partial path/trail. Called once
+// per drain batch while a run is live and the user hasn't clicked away.
+function liveGridUpdate(file) {
+  if (!liveFollow||activeRun!==file||file!==selectedFile) return;
+  if (NO_PATH_SUITES.has(file)) return;
+  const result=runResults[file];
+  if (!result||!result.cases||!result.cases.length) return;
+  const caseLines=result.cases[result.cases.length-1].lines;
+  const path=inferPath(caseLines);
+  const poseTrail=inferPoseTrail(caseLines);
+  const trail=poseTrail||path;
+  if (!trail||trail.length<2) return; // nothing drawable yet — keep current view
+  let {start,goal}=inferStartGoal(caseLines);
+  if (!start) start=[Math.round(trail[0][0]),Math.round(trail[0][1])];
+  // no goal fallback while live: the trail's end is the robot, not the goal
+  const mapKey=inferMapKey(caseLines,file);
+  clearTimeout(tgAnimTimer);
+  document.getElementById('tg-title').textContent='live · '+mapKey.replace(/\d+/,'').trim()+' map';
+  drawTestGrid(mapKey,start,goal,poseTrail?null:path,trail.length-1,poseTrail,true);
 }
 
 function showCase(file, idx) {
@@ -904,8 +946,22 @@ async function initTestsDir() {
 //  RUN CONTROLS
 // ═══════════════════════════════════════════════════════════
 function runSelected() {
+  if (activeRun) { stopRun(); return; } // button doubles as Stop while running
   if (!selectedFile) return;
   startRun(selectedFile);
+}
+
+function stopRun() {
+  if (!activeRun) return;
+  const file=activeRun;
+  stopRequested=true;
+  window._runDoneCb=null; // halt a run-all chain
+  if (window.navi&&window.navi.stopTest) {
+    window.navi.stopTest(file); // kill → 'close' → test:done → drain → finishRun
+  } else {
+    _resetStream(file);
+    finishRun(file,-1);
+  }
 }
 function runAll() {
   const runnable=TEST_FILES.filter(t=>t.status!=='todo');
@@ -944,10 +1000,10 @@ function startRun(file, onDone, testNum) {
   renderTestList();
   document.getElementById('output-pane').innerHTML='';
   renderSummary(file); // visible from the start: 0 passed / 0 failed, counting up live
+  liveFollow=true; stopRequested=false;
   document.getElementById('output-meta').textContent=testNum?`running test ${testNum}...`:'running...';
-  document.getElementById('run-btn-test').classList.add('running');
-  document.getElementById('run-btn-test').textContent='Running…';
-  document.getElementById('run-btn-test').disabled=true;
+  const rb=document.getElementById('run-btn-test');
+  rb.classList.add('running'); rb.textContent='Stop'; rb.disabled=false;
   renderCaseList(file);
   clearTimeout(tgAnimTimer);
   tgOverlay.style.display='none';
@@ -959,16 +1015,19 @@ function startRun(file, onDone, testNum) {
 
 function finishRun(file,exitCode) {
   const ranTest=activeRunTest;
-  activeRun=null; activeRunTest=null;
+  const wasStopped=stopRequested;
+  activeRun=null; activeRunTest=null; stopRequested=false; liveFollow=false;
   const result=runResults[file]; if(!result) return;
   result.ms=Date.now()-result.t0;
   result.exit=exitCode;
+  result.stopped=wasStopped;
   result.cases=groupIntoCases(result.lines);
   result.passed=result.cases.filter(c=>c.passed===true).length;
   result.failed=result.cases.filter(c=>c.passed===false).length;
   result.cases.forEach(c=>mergeCaseFromRun(file,c));
   // single-test run that crashed without a parsed FAIL still failed that test
-  if (ranTest&&exitCode!==0) {
+  // (unless the user stopped it — then it stays "not run")
+  if (ranTest&&exitCode!==0&&!wasStopped) {
     const entry=(suiteCases[file]||[]).find(c=>c.num===ranTest);
     if (entry&&entry.passed===null) entry.passed=false;
   }
@@ -976,7 +1035,8 @@ function finishRun(file,exitCode) {
   document.getElementById('run-btn-test').classList.remove('running');
   document.getElementById('run-btn-test').textContent='Run suite';
   document.getElementById('run-btn-test').disabled=false;
-  document.getElementById('output-meta').textContent=`exit ${exitCode} · ${result.ms} ms`;
+  document.getElementById('output-meta').textContent=
+    wasStopped?`stopped · ${result.ms} ms`:`exit ${exitCode} · ${result.ms} ms`;
   if (file===selectedFile) {
     renderSummary(file); renderCaseList(file);
     // keep whichever case was last shown while streaming; otherwise auto-select
@@ -988,6 +1048,9 @@ function finishRun(file,exitCode) {
       }
       if (idx<0) idx=arr.findIndex(c=>c.lines&&c.lines.length>0);
       if (idx>=0) showCase(file,idx);
+    } else if (selectedCaseIdx!==null&&arr[selectedCaseIdx]) {
+      // restore the polished case view (title + animation) over the last live frame
+      showCase(file,selectedCaseIdx);
     }
   }
   if (window._runDoneCb) { const cb=window._runDoneCb; window._runDoneCb=null; setTimeout(cb,80); }
@@ -998,14 +1061,25 @@ function finishRun(file,exitCode) {
 // ═══════════════════════════════════════════════════════════
 function appendLine(file,parsed) {
   const result=runResults[file];
+  // Regrouping is O(lines); per-line it goes quadratic on huge outputs.
+  // Only regroup on structurally interesting lines (or every 50th line).
+  let structural=false;
   if (result) {
     result.lines.push(parsed);
-    result.cases=groupIntoCases(result.lines);
-    result.passed=result.cases.filter(c=>c.passed===true).length;
-    result.failed=result.cases.filter(c=>c.passed===false).length;
-    result.cases.forEach(c=>mergeCaseFromRun(file,c));
+    structural=isTestHeader(parsed.text)||isPass(parsed.text)||isFail(parsed.text)
+      ||result.lines.length%500===0;
+    if (structural) {
+      result.cases=groupIntoCases(result.lines);
+      result.passed=result.cases.filter(c=>c.passed===true).length;
+      result.failed=result.cases.filter(c=>c.passed===false).length;
+      result.cases.forEach(c=>mergeCaseFromRun(file,c));
+    } else if (result.cases.length) {
+      // keep the streaming case's lines current between regroups so the
+      // grid preview can follow the run live
+      result.cases[result.cases.length-1].lines.push(parsed);
+    }
   }
-  if (result&&file===selectedFile) {
+  if (result&&file===selectedFile&&structural) {
     renderCaseList(file);
     if (activeRun===file) {
       renderSummary(file); // live pass/fail counts while streaming
@@ -1023,12 +1097,23 @@ function appendLine(file,parsed) {
   const div=document.createElement('div');
   div.className='out-line '+classForLine(parsed);
   div.innerHTML=`<span class="out-level">${parsed.level.slice(0,4)}</span><span class="out-text">${esc(parsed.text)}</span>`;
-  pane.appendChild(div); pane.scrollTop=pane.scrollHeight;
+  pane.appendChild(div);
+  // NOTE: scrolling + DOM capping happen once per drain batch in
+  // _drainLines — doing them per line forces a layout reflow each call
+  // and makes large outputs crawl.
 }
 function renderOutput(file) {
   const result=runResults[file]; if(!result) return;
   const pane=document.getElementById('output-pane'); pane.innerHTML='';
-  result.lines.forEach(l=>{ const div=document.createElement('div'); div.className='out-line '+classForLine(l); div.innerHTML=`<span class="out-level">${l.level.slice(0,4)}</span><span class="out-text">${esc(l.text)}</span>`; pane.appendChild(div); });
+  let lines=result.lines;
+  if (lines.length>4000) {
+    const note=document.createElement('div');
+    note.className='out-line';
+    note.innerHTML=`<span class="out-level">note</span><span class="out-text" style="color:var(--text-2)">… ${lines.length-4000} earlier lines hidden …</span>`;
+    pane.appendChild(note);
+    lines=lines.slice(-4000);
+  }
+  lines.forEach(l=>{ const div=document.createElement('div'); div.className='out-line '+classForLine(l); div.innerHTML=`<span class="out-level">${l.level.slice(0,4)}</span><span class="out-text">${esc(l.text)}</span>`; pane.appendChild(div); });
   pane.scrollTop=pane.scrollHeight; renderSummary(file);
 }
 function renderSummary(file) {
@@ -1055,12 +1140,28 @@ function _scheduleFlush(file, delay) {
   if (_lineTimer[file]) return;
   _lineTimer[file] = setTimeout(() => { _lineTimer[file] = null; _drainLines(file); }, delay);
 }
+const _lastDrainTs = {};
 function _drainLines(file) {
   const buf = _lineBuffer[file];
   if (buf && buf.length) {
-    for (let i = 0; i < LINES_PER_TICK && buf.length; i++) {
+    // Adaptive drain: readable pace for normal output, but scale the batch
+    // with backlog size and REAL elapsed time (timers are throttled in
+    // background windows), so any log flood clears in ~5 s.
+    const now = performance.now();
+    const elapsed = Math.min(2000, now - (_lastDrainTs[file] || (now - LINE_DELAY)));
+    _lastDrainTs[file] = now;
+    const paced = Math.max(LINES_PER_TICK, Math.round(elapsed / LINE_DELAY));
+    const batch = Math.max(paced, Math.ceil(buf.length * elapsed / 5000));
+    for (let i = 0; i < batch && buf.length; i++) {
       appendLine(file, buf.shift());
       if (buf.length && isTestHeader(buf[0].text)) break; // beat before the next case
+    }
+    if (file === selectedFile) {
+      // one scroll + cap per batch (per-line reflows are what made floods crawl)
+      const pane = document.getElementById('output-pane');
+      while (pane.children.length > 4000) pane.removeChild(pane.firstChild);
+      pane.scrollTop = pane.scrollHeight;
+      liveGridUpdate(file);
     }
   }
   if (buf && buf.length) {

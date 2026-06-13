@@ -55,25 +55,31 @@ def dwa_is_valid(best_vel, best_omega, dwa):
             return True
     return False
 
-def navigate_closed_loop(dwa, start, theta, goal, obstacles, max_replans=60, tol=0.7):
+def navigate_closed_loop(dwa, start, theta, goal, obstacles, grid=None, max_replans=100, tol=0.7):
     """
     Drive the robot with repeated DWA plans (closed loop) until it reaches
     the goal, re-validating every velocity command against the limits.
     Each chosen command is integrated for one 0.5 s control period before
-    replanning. Returns (reached, commands_valid, replans, final_pose).
+    replanning. When `grid` is given, every integrated pose is checked
+    against it — entering an occupied cell counts as a collision, and the
+    robot's center moving past the map's half-cell border (cells span
+    +/-0.5 around their integer centers) counts as leaving the map.
+    Returns (reached, commands_valid, collided, left_map, replans, final_pose).
     """
     x, y, th = float(start[0]), float(start[1]), float(theta)
     v, om = 0.0, 0.0
     commands_valid = True
+    collided = False
+    left_map = False
     logger.info(f"Start: ({start[0]}, {start[1]}), Goal: ({goal[0]}, {goal[1]})")
     for i in range(max_replans):
         logger.info(f"pose=({x:.2f},{y:.2f})")
         if np.hypot(goal[0] - x, goal[1] - y) <= tol:
-            return True, commands_valid, i, (x, y)
+            return True, commands_valid, collided, left_map, i, (x, y)
         pair = dwa.plan((x, y, th), (v, om), goal, obstacles)
         if pair is None:
             logger.warning("Planner returned None mid-route.")
-            return False, commands_valid, i, (x, y)
+            return False, commands_valid, collided, left_map, i, (x, y)
         v, om = pair
         if not dwa_is_valid(v, om, dwa):
             logger.warning(f"Invalid command v={v:.3f}, omega={om:.3f} at replan {i}")
@@ -82,8 +88,18 @@ def navigate_closed_loop(dwa, start, theta, goal, obstacles, max_replans=60, tol
             x += v * np.cos(th) * 0.1
             y += v * np.sin(th) * 0.1
             th += om * 0.1
+            if grid is not None:
+                if not collided:
+                    r, c = int(round(x)), int(round(y))
+                    if 0 <= r < len(grid) and 0 <= c < len(grid[0]) and grid[r][c] != 0:
+                        logger.warning(f"Collision: robot entered occupied cell ({r}, {c}) at pose=({x:.2f},{y:.2f})")
+                        collided = True
+                if not left_map:
+                    if not (-0.5 <= x <= len(grid) - 0.5 and -0.5 <= y <= len(grid[0]) - 0.5):
+                        logger.warning(f"Out of bounds: robot center left the map at pose=({x:.2f},{y:.2f})")
+                        left_map = True
     logger.warning(f"Did not reach goal after {max_replans} replans.")
-    return False, commands_valid, max_replans, (x, y)
+    return False, commands_valid, collided, left_map, max_replans, (x, y)
 
 # END SETUP METHODS
 
@@ -226,15 +242,24 @@ def test_valid_path():
 
     obstacles = np.argwhere(map1 == 1)
 
-    reached, commands_valid, replans, final_pose = navigate_closed_loop(
-        dwa, start, theta, goal, obstacles
+    # future API: when DWAPlanner grows set_occupancy_grid (like A*/D* Lite),
+    # the planner learns the map bounds without any further test changes
+    if hasattr(dwa, 'set_occupancy_grid'):
+        dwa.set_occupancy_grid(map1)
+
+    reached, commands_valid, collided, left_map, replans, final_pose = navigate_closed_loop(
+        dwa, start, theta, goal, obstacles, grid=map1
     )
 
-    if reached and commands_valid:
-        logger.info(f"PASS: reached goal in {replans} replans, all commands within limits")
+    if reached and commands_valid and not collided and not left_map:
+        logger.info(f"PASS: reached goal in {replans} replans, stayed on the map, no collisions, all commands within limits")
         return True
     if not commands_valid:
         logger.error("FAIL: DWA produced out-of-limit velocity commands")
+    elif collided:
+        logger.error("FAIL: robot drove through an obstacle cell en route")
+    elif left_map:
+        logger.error("FAIL: robot left the map boundary en route")
     else:
         logger.error(f"FAIL: robot did not reach goal, final pose ({final_pose[0]:.2f}, {final_pose[1]:.2f})")
     return False
@@ -262,15 +287,24 @@ def test_valid_path_obstacles():
 
     obstacles = np.argwhere(map1 == 1)
 
-    reached, commands_valid, replans, final_pose = navigate_closed_loop(
-        dwa, start, theta, goal, obstacles
+    # future API: when DWAPlanner grows set_occupancy_grid (like A*/D* Lite),
+    # the planner learns the map bounds without any further test changes
+    if hasattr(dwa, 'set_occupancy_grid'):
+        dwa.set_occupancy_grid(map1)
+
+    reached, commands_valid, collided, left_map, replans, final_pose = navigate_closed_loop(
+        dwa, start, theta, goal, obstacles, grid=map1
     )
 
-    if reached and commands_valid:
-        logger.info(f"PASS: reached goal in {replans} replans, all commands within limits")
+    if reached and commands_valid and not collided and not left_map:
+        logger.info(f"PASS: reached goal in {replans} replans, stayed on the map, no collisions, all commands within limits")
         return True
     if not commands_valid:
         logger.error("FAIL: DWA produced out-of-limit velocity commands")
+    elif collided:
+        logger.error("FAIL: robot drove through an obstacle cell en route")
+    elif left_map:
+        logger.error("FAIL: robot left the map boundary en route")
     else:
         logger.error(f"FAIL: robot did not reach goal, final pose ({final_pose[0]:.2f}, {final_pose[1]:.2f})")
     return False
@@ -296,15 +330,24 @@ def test_valid_path_facing_away():
 
     obstacles = np.argwhere(map1 == 1)
 
-    reached, commands_valid, replans, final_pose = navigate_closed_loop(
-        dwa, start, theta, goal, obstacles
+    # future API: when DWAPlanner grows set_occupancy_grid (like A*/D* Lite),
+    # the planner learns the map bounds without any further test changes
+    if hasattr(dwa, 'set_occupancy_grid'):
+        dwa.set_occupancy_grid(map1)
+
+    reached, commands_valid, collided, left_map, replans, final_pose = navigate_closed_loop(
+        dwa, start, theta, goal, obstacles, grid=map1
     )
 
-    if reached and commands_valid:
-        logger.info(f"PASS: turned around and reached goal in {replans} replans, all commands within limits")
+    if reached and commands_valid and not collided and not left_map:
+        logger.info(f"PASS: turned around and reached goal in {replans} replans, stayed on the map, no collisions, all commands within limits")
         return True
     if not commands_valid:
         logger.error("FAIL: DWA produced out-of-limit velocity commands")
+    elif collided:
+        logger.error("FAIL: robot drove through an obstacle cell en route")
+    elif left_map:
+        logger.error("FAIL: robot left the map boundary en route")
     else:
         logger.error(f"FAIL: robot did not reach goal, final pose ({final_pose[0]:.2f}, {final_pose[1]:.2f})")
     return False

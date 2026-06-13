@@ -23,6 +23,7 @@ jobs:
           python tests/AStar_planner_test.py
           python tests/DStar_Lite_planner_test.py
           python tests/DWA_planner_test.py
+          python tests/astar_dwa_integration_test.py
           python tests/geometry_test.py
           python tests/imu_test.py
           python tests/kinematics_test.py

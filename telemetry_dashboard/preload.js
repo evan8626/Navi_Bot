@@ -8,6 +8,9 @@ contextBridge.exposeInMainWorld('navi', {
   // List a suite's test cases; resolves to ["TEST 1: ...", ...]
   listTests: (file, testsDir) => ipcRenderer.invoke('tests:list', { file, testsDir }),
 
+  // Kill a running test process; completion arrives via onTestDone
+  stopTest: (file) => ipcRenderer.send('test:stop', { file }),
+
   // Open native folder picker; resolves to chosen path string or null
   pickDir: () => ipcRenderer.invoke('dialog:pickDir'),
 

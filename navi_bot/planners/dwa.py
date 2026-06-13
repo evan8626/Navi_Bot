@@ -19,6 +19,10 @@ import heapq
 
 logger = logging.getLogger(__name__)
 
+ROBOT_RADIUS = 0.25 # meters
+CELL_RADIUS = 0.5 # meters
+GRID_RESOLUTION = 0.05 # meters
+
 class DWAPlanner:
     """
     Dynamic Window Approach for local planning.
@@ -38,8 +42,43 @@ class DWAPlanner:
         
         # Scoring weights
         self.heading_weight = 1.0
-        self.clearance_weight = 2.0
-        self.velocity_weight = 0.5
+        self.speed_cost_gain = 1.0
+        self.obstacle_cost_gain = 0.5
+        
+        self.grid_resolution = GRID_RESOLUTION
+        self.occupancy_grid = None
+        
+    def set_occupancy_grid(self, grid):
+        """Update the occupancy grid."""
+        self.occupancy_grid = grid
+        
+    def is_coord_valid(self, row, col):
+        """Checks for existant row/col, and row/col values 0 or greater"""
+        if row is None:
+            logger.info(f"row is {row}")
+            return False
+        elif col is None:
+            logger.info(f"col is {col}")
+            return False
+        elif (row >= 0) and (col >= 0):
+            if self.occupancy_grid is None:
+                return True
+            max_rows = len(self.occupancy_grid)
+            max_cols = len(self.occupancy_grid[0])
+            if (max_rows > row) and (max_cols > col):
+                return True
+            else:
+                return False
+        else:
+            return False
+        
+    def is_pose_inbounds(self, x, y):
+        """Check if the pose is within the bounds of the occupancy grid."""
+        if self.occupancy_grid is None:
+            return True
+        rows = len(self.occupancy_grid)
+        cols = len(self.occupancy_grid[0])
+        return (-0.5 + ROBOT_RADIUS <= x <= rows - 0.5 - ROBOT_RADIUS and -0.5 + ROBOT_RADIUS <= y <= cols - 0.5 - ROBOT_RADIUS)
         
     def plan(self, current_pose, current_vel, goal, obstacles):
         """
@@ -59,6 +98,14 @@ class DWAPlanner:
             return None
         elif goal is None:
             logger.warning("Goal is None. Cannot plan.")
+            return None
+        elif self.is_pose_inbounds(current_pose[0], current_pose[1]) is False:
+            logger.warning("Invalid current pose coordinates")
+            logger.warning(f"Current pose coords are X: {current_pose[0]}, Y: {current_pose[1]}")
+            return None
+        elif self.is_coord_valid(goal[0], goal[1]) is False:
+            logger.warning("Invalid goal coordinates")
+            logger.warning(f"Goal coords are X: {goal[0]}, Y: {goal[1]}")
             return None
         
         time_horizon = 2.0
@@ -87,12 +134,10 @@ class DWAPlanner:
                     
                 score = self.score_trajectory(vel, goal, obstacles, positional_info)
                 if score is None:
-                    logger.warning("Score is None. Skipping this trajectory.")
                     continue
                 kinematics.update({vel: score})
         if not kinematics:
-            logger.warning("No valid trajectories found. Cannot plan.")
-            return None
+            return (0.0, 0.0)
         best_v, best_omega = max(kinematics, key=kinematics.get)
         
         return (best_v, best_omega)
@@ -133,38 +178,39 @@ class DWAPlanner:
     def score_trajectory(self, vel, goal, obstacles, pos):
         """Score a velocity command"""
         if vel is None:
-            logger.warning("There is no velocity. Cannot score trajectory.")
             return None
         elif goal is None:
-            logger.warning("There is no goal. Cannot score trajectory.")
             return None
         elif pos is None:
-            logger.warning("There is no positional information. Cannot score trajectory.")
             return None
         
-        angle = 0.0
-        clearance_list = []
+        contact = ROBOT_RADIUS + CELL_RADIUS
+        
+        min_clearance = float('inf')
         for p in pos:
             x, y, theta = p
-            coord = (x, y)
-            angle = angle_between_points(coord, goal)
+            
+            if not self.is_pose_inbounds(x, y):
+                return None
+            
             if obstacles.size == 0:
-                clearance_list.append(10.0)
+                min_clearance = min(min_clearance, 10.0)
             else:
                 for obstacle in obstacles:
-                    clear = heuristic_forward(coord, obstacle)
-                    clearance_list.append(clear)
-        _, _, final_theta = pos[-1]
-        heading = angle_between_points((pos[-1][0], pos[-1][1]), goal) - final_theta
-        heading = normalize_angle(heading)
-        heading = abs(heading)
-        if not clearance_list:
-            logger.warning("No clearance information available. Cannot score trajectory.")
+                    clear = heuristic_forward((x, y), obstacle)
+                    if clear < contact:
+                        return None
+                    min_clearance = min(min_clearance, clear)
+        
+        braking_room = max(0.0, min_clearance - contact)
+        if abs(vel[0]) > np.sqrt(2.0 * braking_room * self.max_accel_x):
             return None
-        clearance = min(clearance_list)
-        score = -(self.heading_weight * heading) + (self.clearance_weight * clearance) + (self.velocity_weight * vel[0])
-        return score
-    
+        
+        _, _, final_theta = pos[-1]
+        heading = abs(normalize_angle(angle_between_points((pos[-1][0], pos[-1][1]), goal) - final_theta))
+        
+        return (-(self.heading_weight * heading) - self.obstacle_cost_gain * (1.0 / min_clearance)) + (self.speed_cost_gain * vel[0])
+
 def heuristic_forward(pos, goal):
     """Euclidian distance heuristic."""
     return np.sqrt((pos[0] - goal[0])**2 + (pos[1] - goal[1])**2)

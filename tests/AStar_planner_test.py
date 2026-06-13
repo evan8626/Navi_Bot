@@ -8,9 +8,12 @@ Tests that the A* planner correctly:
 - Able to plan a diagonal path
 - Able to plan a more complex path
 """
+import heapq
 import logging
-import numpy as np
+import math
 import sys
+
+import numpy as np
 
 from navi_bot.planners.astar import AStarPlanner
 
@@ -364,8 +367,180 @@ def obstacle_map():
         [1, 0, 1, 0, 1, 0, 1, 0]
     ])
 
+# MARK: Reference Model
+#
+# Intended movement model for all grid planners in this project:
+#   - 8-connected neighbors
+#   - cardinal step cost 1.0, diagonal step cost sqrt(2)
+#   - a diagonal move is only legal when BOTH adjacent cardinal cells are
+#     free (no corner cutting past obstacle corners)
+
+SQRT2 = math.sqrt(2)
+
+
+def reference_shortest_cost(grid, start, goal):
+    """
+    Plain Dijkstra under the intended movement model. Small and obviously
+    correct — used as the ground truth for optimality tests.
+    Returns the optimal path cost, or None if the goal is unreachable.
+    """
+    rows, cols = len(grid), len(grid[0])
+
+    def free(r, c):
+        return 0 <= r < rows and 0 <= c < cols and grid[r][c] == 0
+
+    if not (free(*start) and free(*goal)):
+        return None
+    dist = {tuple(start): 0.0}
+    pq = [(0.0, tuple(start))]
+    while pq:
+        d, (r, c) = heapq.heappop(pq)
+        if (r, c) == tuple(goal):
+            return d
+        if d > dist.get((r, c), float('inf')):
+            continue
+        for dr, dc in ((0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+            nr, nc = r + dr, c + dc
+            if not free(nr, nc):
+                continue
+            if dr != 0 and dc != 0 and not (free(r, nc) and free(nr, c)):
+                continue  # corner cut — not a legal move
+            nd = d + (SQRT2 if dr != 0 and dc != 0 else 1.0)
+            if nd < dist.get((nr, nc), float('inf')) - 1e-12:
+                dist[(nr, nc)] = nd
+                heapq.heappush(pq, (nd, (nr, nc)))
+    return None
+
+
+def path_cost(path):
+    """Cost of a path under the intended movement model (steps must be adjacent)."""
+    total = 0.0
+    for a, b in zip(path, path[1:]):
+        dr, dc = b[0] - a[0], b[1] - a[1]
+        if (dr, dc) == (0, 0) or abs(dr) > 1 or abs(dc) > 1:
+            return None
+        total += SQRT2 if dr != 0 and dc != 0 else 1.0
+    return total
+
+
+def validate_path(path, grid, start, goal, forbid_corner_cuts=False):
+    """Check a path's structure. Returns (ok, reason)."""
+    if not path:
+        return False, "path is empty"
+    if tuple(path[0]) != tuple(start):
+        return False, f"path starts at {path[0]}, not {start}"
+    if tuple(path[-1]) != tuple(goal):
+        return False, f"path ends at {path[-1]}, not {goal}"
+    if grid[path[0][0]][path[0][1]] != 0:
+        return False, f"start cell {path[0]} is occupied"
+    for a, b in zip(path, path[1:]):
+        dr, dc = b[0] - a[0], b[1] - a[1]
+        if max(abs(dr), abs(dc)) != 1:
+            return False, f"illegal step {a} -> {b}"
+        if grid[b[0]][b[1]] != 0:
+            return False, f"step onto occupied cell {b}"
+        if forbid_corner_cuts and dr != 0 and dc != 0:
+            if grid[a[0]][b[1]] != 0 or grid[b[0]][a[1]] != 0:
+                return False, f"corner cut {a} -> {b}"
+    return True, ""
+
+
+# MARK: Path Quality
+
+def test_path_validity():
+    """Returned paths must start at start, end at goal, and step only between adjacent free cells."""
+    passed = True
+    logger.info("TEST 13: Path validity — endpoints, adjacency, free cells")
+    cases = [
+        (clear_map(), (0, 0), (7, 7)),
+        (obstacle_map(), (0, 0), (7, 7)),
+        (obstacle_map(), (0, 0), (5, 7)),
+    ]
+    for grid, start, goal in cases:
+        a_star = setup_AStar()
+        a_star.set_occupancy_grid(grid)
+        path = a_star.plan(start, goal)
+        if path is None:
+            logger.warning(f"  FAIL {start}->{goal}: no path returned")
+            passed = False
+            continue
+        ok, reason = validate_path(path, grid, start, goal)
+        if not ok:
+            logger.warning(f"  FAIL {start}->{goal}: {reason}")
+            passed = False
+        else:
+            logger.info(f"  OK   {start}->{goal}: {len(path)} waypoints, all steps legal")
+    logger.info("PASS" if passed else "FAIL")
+    return passed
+
+
+def test_path_optimality():
+    """Path cost must equal the reference Dijkstra optimum (no corner cuts).
+
+    Differential test: the reference implements the intended movement
+    model — cardinal 1.0, diagonal sqrt(2), diagonals only when both
+    adjacent cardinal cells are free. The A* path must be legal under
+    that model and cost exactly the optimum.
+    """
+    passed = True
+    logger.info("TEST 14: Path cost matches reference optimum (no corner cutting)")
+    cases = [
+        (clear_map(), (0, 0), (0, 7)),
+        (clear_map(), (0, 0), (7, 7)),
+        (clear_map(), (0, 0), (5, 7)),
+        (obstacle_map(), (0, 0), (0, 7)),
+        (obstacle_map(), (0, 0), (7, 7)),
+        (obstacle_map(), (0, 0), (5, 7)),
+    ]
+    for grid, start, goal in cases:
+        a_star = setup_AStar()
+        a_star.set_occupancy_grid(grid)
+        path = a_star.plan(start, goal)
+        ref = reference_shortest_cost(grid, start, goal)
+        if path is None:
+            logger.warning(f"  FAIL {start}->{goal}: no path (reference says cost {ref})")
+            passed = False
+            continue
+        ok, reason = validate_path(path, grid, start, goal, forbid_corner_cuts=True)
+        cost = path_cost(path)
+        if not ok:
+            logger.warning(f"  FAIL {start}->{goal}: {reason}")
+            passed = False
+        elif ref is None or cost is None or abs(cost - ref) > 1e-6:
+            logger.warning(f"  FAIL {start}->{goal}: path cost {cost}, reference optimum {ref}")
+            passed = False
+        else:
+            logger.info(f"  OK   {start}->{goal}: cost {cost:.4f} == optimum")
+    logger.info("PASS" if passed else "FAIL")
+    return passed
+
+
+def test_no_corner_cutting_through_pinch():
+    """A diagonal must not squeeze between two touching obstacle corners.
+
+    Start (0,0) with (0,1) and (1,0) blocked is sealed in: the only way
+    out is the illegal diagonal through the pinch to (1,1). A correct
+    planner must report no path.
+    """
+    passed = True
+    logger.info("TEST 15: Corner-cutting through a sealed pinch must find no path")
+    grid = clear_map()
+    grid[0][1] = 1
+    grid[1][0] = 1
+    a_star = setup_AStar()
+    a_star.set_occupancy_grid(grid)
+    path = a_star.plan((0, 0), (7, 7))
+    if path is not None:
+        logger.warning(f"  FAIL planner escaped a sealed start by cutting the corner: {path[:3]}...")
+        passed = False
+    else:
+        logger.info("  OK   sealed start correctly reported as unreachable")
+    logger.info("PASS" if passed else "FAIL")
+    return passed
+
+
 #MARK: Main Method
- 
+
 def main():
     tests = [
         test_none_start,
@@ -380,6 +555,9 @@ def main():
         test_straight_line_obstacle,
         test_diagonal_obstacle,
         test_staggered_obstacle,
+        test_path_validity,
+        test_path_optimality,
+        test_no_corner_cutting_through_pinch,
     ]
 
     args = sys.argv[1:]
