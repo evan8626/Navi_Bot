@@ -175,7 +175,7 @@
       border:.5px solid var(--border-hi); border-radius:var(--r); cursor:pointer;
       background:transparent; color:var(--text-1); white-space:nowrap; }
     #dir-btn:hover { color:var(--text-0); background:var(--bg-3); }
-    #test-list { flex:1; overflow-y:auto; padding:4px 0; scrollbar-width:thin; }
+    #test-list { flex:1; overflow-y:auto; overflow-x:hidden; padding:4px 0; scrollbar-width:thin; }
     .test-file { padding:7px 12px; cursor:pointer; border-left:2px solid transparent;
       transition:all .1s; display:flex; align-items:center;
       justify-content:space-between; gap:6px; }
@@ -183,8 +183,9 @@
     .test-file.selected { background:var(--bg-2); border-left-color:var(--green); }
     .test-file.unavailable { opacity:.35; cursor:default; }
     .test-file.unavailable:hover { background:transparent; }
-    .tf-name { font-size:11px; color:var(--text-0); }
-    .tf-sub  { font-size:9px; color:var(--text-2); margin-top:1px; }
+    .tf-text { flex:1; min-width:0; }  /* shrinks so long filenames truncate instead of overflowing */
+    .tf-name { font-size:11px; color:var(--text-0); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .tf-sub  { font-size:9px; color:var(--text-2); margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .tf-badge { font-size:9px; padding:2px 6px; border-radius:10px;
       white-space:nowrap; flex-shrink:0; font-weight:500; }
     .badge-ready   { background:rgba(90,88,82,.25); color:var(--text-2); }
@@ -496,9 +497,33 @@ function inferMapKey(lines, file) {
   const is20 = /waypoint|mission|pickup|delivery/.test(file+joined);
   if (is20) { return /obstacle|wall|complex/.test(joined) ? 'obstacle20' : 'clear20'; }
   if (/blocked map|entire map is blocked|fully occupied/.test(joined)) return 'blocked8';
+  if (/open map|clear map/.test(joined)) return 'clear8'; // explicit override beats the 'obstacle' keyword
   if (/obstacle/.test(joined)) return 'obstacle8';
   return 'clear8';
 }
+
+// A test can log its ACTUAL occupancy grid as "MAP <rows> <cols>" followed by
+// one "MAPROW <0/1 string>" per row. When present we draw that exact grid
+// instead of guessing a fixed map, so the robot trail lines up with the real
+// obstacles (fixes trails that appear to cross walls on non-standard maps).
+function inferLoggedGrid(lines) {
+  let rows=0, cols=0, grid=[];
+  for (const l of lines) {
+    const m=l.text.match(/^MAP\s+(\d+)\s+(\d+)\b/);
+    if (m) { rows=+m[1]; cols=+m[2]; grid=[]; continue; }
+    const rm=l.text.match(/^MAPROW\s+([01]+)\s*$/);
+    if (rm) grid.push(rm[1].split('').map(Number));
+  }
+  if (rows>0 && cols>0 && grid.length===rows && grid.every(r=>r.length===cols)) return {rows,cols,grid};
+  return null;
+}
+// A logged grid wins; otherwise fall back to the keyword guess.
+function resolveMapKey(lines, file) {
+  const logged=inferLoggedGrid(lines);
+  if (logged) { MAPS.__logged=logged; return '__logged'; }
+  return inferMapKey(lines, file);
+}
+function mapLabelOf(k) { return k==='__logged'?'test':k.replace(/\d+/,'').trim(); }
 
 const COORD_NUM='(-?\\d+(?:\\.\\d+)?)';
 const startRe=new RegExp('start[^:(]*[:(]+\\s*\\(?'+COORD_NUM+'[,\\s]+'+COORD_NUM,'i');
@@ -531,6 +556,17 @@ function inferPoseTrail(lines) {
   return trail.length>1?trail:null;
 }
 
+// Per-step position of a moving hazard ("hazard at (r,c)"), logged 1:1 with the
+// pose trail so the grid can animate the dynamic obstacle alongside the robot.
+function inferHazardTrail(lines) {
+  const trail=[];
+  for (const l of lines) {
+    const m=l.text.match(/hazard\s+at\s+\((-?\d+),\s*(-?\d+)\)/i);
+    if (m) trail.push([parseInt(m[1]),parseInt(m[2])]);
+  }
+  return trail.length?trail:null;
+}
+
 // ═══════════════════════════════════════════════════════════
 //  TEST MAP CANVAS
 // ═══════════════════════════════════════════════════════════
@@ -538,6 +574,9 @@ const tgCanvas = document.getElementById('test-grid-canvas');
 const tgCtx    = tgCanvas.getContext('2d');
 const tgOverlay= document.getElementById('no-path-overlay');
 let tgAnimTimer=null, tgPathStep=0;
+// Current grid preview, captured by showCase so hover can scrub the robot
+// back and forth along the finished path: {mapKey,start,goal,trail,isPoseTrail}
+let tgPreview=null, tgScrubActive=false, tgHazardTrail=null;
 
 // Robot marker shared by the test grid and the demo map: red dot with a
 // white chevron pointing along the heading (screen-space radians; null = no arrow).
@@ -594,6 +633,18 @@ function drawTestGrid(mapKey, start, goal, path, step, poseTrail, hasData) {
   tgCtx.globalAlpha=1.0;
   if (!hasData) return;
 
+  // Moving hazard (dynamic obstacle) at the current step — drawn under the
+  // path so the robot's dodge reads against it.
+  if (tgHazardTrail && step>=0) {
+    const h=tgHazardTrail[Math.min(step,tgHazardTrail.length-1)];
+    if (h) {
+      tgCtx.fillStyle='rgba(226,75,74,0.5)';
+      tgCtx.fillRect(h[1]*cell,h[0]*cell,cell,cell);
+      tgCtx.strokeStyle='rgba(226,75,74,0.9)'; tgCtx.lineWidth=1;
+      tgCtx.strokeRect(h[1]*cell,h[0]*cell,cell,cell);
+    }
+  }
+
   // Pose trail (float coords — waypoint nav / DWA rollout). Large jumps
   // between consecutive poses break the polyline instead of criss-crossing.
   if (poseTrail && poseTrail.length>1) {
@@ -645,6 +696,37 @@ function animateTrail(mapKey, start, goal, trail, isPoseTrail) {
   step();
 }
 
+// ── Hover to scrub the robot back and forth along the finished path ──
+function tgLabel(p, suffix) {
+  document.getElementById('tg-title').textContent=`${mapLabelOf(p.mapKey)} map${suffix}`;
+}
+function tgScrubTo(clientX, clientY) {
+  if (activeRun || !tgPreview || !tgPreview.trail || tgPreview.trail.length<2) return;
+  const rect=tgCanvas.getBoundingClientRect();
+  if (!rect.width||!rect.height) return;
+  const map=MAPS[tgPreview.mapKey]||MAPS.clear8;
+  const col=(clientX-rect.left)/rect.width*map.cols;
+  const row=(clientY-rect.top)/rect.height*map.rows;
+  let best=0, bestD=Infinity;
+  tgPreview.trail.forEach((pt,i)=>{ const d=(pt[0]-row)**2+(pt[1]-col)**2; if(d<bestD){bestD=d;best=i;} });
+  clearTimeout(tgAnimTimer); tgScrubActive=true;
+  const {mapKey,start,goal,trail,isPoseTrail}=tgPreview;
+  if (isPoseTrail) drawTestGrid(mapKey,start,goal,null,best,trail,true);
+  else             drawTestGrid(mapKey,start,goal,trail,best,null,true);
+  tgLabel(tgPreview,` · step ${best}/${trail.length-1}`);
+}
+function tgScrubEnd() {
+  if (!tgScrubActive || !tgPreview || !tgPreview.trail) return;
+  tgScrubActive=false; clearTimeout(tgAnimTimer);
+  const {mapKey,start,goal,trail,isPoseTrail}=tgPreview;
+  const last=trail.length-1;
+  if (isPoseTrail) drawTestGrid(mapKey,start,goal,null,last,trail,true);
+  else             drawTestGrid(mapKey,start,goal,trail,last,null,true);
+  tgLabel(tgPreview,(start&&goal)?` · (${start.join(',')})→(${goal.join(',')})`:'');
+}
+tgCanvas.addEventListener('mousemove', e=>tgScrubTo(e.clientX,e.clientY));
+tgCanvas.addEventListener('mouseleave', tgScrubEnd);
+
 // ═══════════════════════════════════════════════════════════
 //  LOG PARSING
 // ═══════════════════════════════════════════════════════════
@@ -691,12 +773,13 @@ const TEST_FILES=[
   {file:'lidar_mock_test.py',         label:'LIDAR',           sub:'sensors/lidar_processing.py', status:'ready'},
   {file:'waypoint_nav_test.py',       label:'Waypoint nav',    sub:'integration (20×20)',     status:'ready'},
   {file:'astar_dwa_integration_test.py', label:'A* + DWA nav', sub:'integration (global+local)', status:'ready'},
+  {file:'dstar_dwa_integration_test.py', label:'D* + DWA nav', sub:'integration (global+local)', status:'ready'},
   {file:'motion_controller_test.py',  label:'Motion controller', sub:'control/motion_controller.py', status:'ready'},
   {file:'odometry_test.py',           label:'Odometry',        sub:'sensors/odometry.py',     status:'ready'},
-  {file:'imu_test.py',                label:'IMU',             sub:'sensors/imu_processor.py', status:'ready'},
+  {file:'imu_test.py',                label:'IMU',             sub:'sensors/imu_processor.py', status:'todo'},
   {file:'geometry_test.py',           label:'Geometry',        sub:'utils/geometry.py',       status:'ready'},
   {file:'profiler_test.py',           label:'Profiler',        sub:'utils/profiler.py',       status:'ready'},
-  {file:'websocket_test.py',          label:'WebSocket',       sub:'utils/websocket.py',      status:'ready'},
+  {file:'websocket_test.py',          label:'WebSocket',       sub:'utils/websocket.py',      status:'todo'},
 ];
 
 const runResults={};
@@ -762,7 +845,7 @@ function renderTestList() {
     if (activeRun===tf.file) ds='running';
     const div=document.createElement('div');
     div.className='test-file'+(tf.status==='todo'?' unavailable':'')+(tf.file===selectedFile?' selected':'');
-    div.innerHTML=`<div><div class="tf-name">${tf.label}</div><div class="tf-sub">${tf.file}</div></div>${badgeFor(ds)}`;
+    div.innerHTML=`<div class="tf-text"><div class="tf-name">${tf.label}</div><div class="tf-sub">${tf.file}</div></div>${badgeFor(ds)}`;
     if (tf.status!=='todo') div.onclick=()=>selectFile(tf.file);
     el.appendChild(div);
   });
@@ -857,14 +940,15 @@ function liveGridUpdate(file) {
   const caseLines=result.cases[result.cases.length-1].lines;
   const path=inferPath(caseLines);
   const poseTrail=inferPoseTrail(caseLines);
+  tgHazardTrail=inferHazardTrail(caseLines);
   const trail=poseTrail||path;
   if (!trail||trail.length<2) return; // nothing drawable yet — keep current view
   let {start,goal}=inferStartGoal(caseLines);
   if (!start) start=[Math.round(trail[0][0]),Math.round(trail[0][1])];
   // no goal fallback while live: the trail's end is the robot, not the goal
-  const mapKey=inferMapKey(caseLines,file);
+  const mapKey=resolveMapKey(caseLines,file);
   clearTimeout(tgAnimTimer);
-  document.getElementById('tg-title').textContent='live · '+mapKey.replace(/\d+/,'').trim()+' map';
+  document.getElementById('tg-title').textContent='live · '+mapLabelOf(mapKey)+' map';
   drawTestGrid(mapKey,start,goal,poseTrail?null:path,trail.length-1,poseTrail,true);
 }
 
@@ -874,6 +958,7 @@ function showCase(file, idx) {
   if (!entry) return;
   const caseLines=entry.lines||[];
   clearTimeout(tgAnimTimer);
+  tgPreview=null; tgScrubActive=false; tgHazardTrail=null; tgCanvas.style.cursor='default';
 
   // Suites that never have path data
   if (NO_PATH_SUITES.has(file)) {
@@ -892,10 +977,11 @@ function showCase(file, idx) {
     return;
   }
 
-  const mapKey=inferMapKey(caseLines,file);
+  const mapKey=resolveMapKey(caseLines,file);
   let {start,goal}=inferStartGoal(caseLines);
   const path=inferPath(caseLines);
   const poseTrail=inferPoseTrail(caseLines);
+  tgHazardTrail=inferHazardTrail(caseLines);  // moving obstacle, animated with the robot
   // No explicit Start:/Goal: in the log — fall back to the trail endpoints
   const trail=poseTrail||path;
   if (trail&&trail.length>1) {
@@ -905,11 +991,15 @@ function showCase(file, idx) {
   const hasData=!!(path||poseTrail);
 
   // Label
-  const mapLabel=mapKey.replace(/\d+/,'').trim();
+  const mapLabel=mapLabelOf(mapKey);
   const arrow=(start&&goal)?` · (${start.join(',')})→(${goal.join(',')})`:'';
   document.getElementById('tg-title').textContent=`${mapLabel} map${arrow}`;
 
   if (hasData) {
+    if (trail&&trail.length>1) {
+      tgPreview={mapKey,start,goal,trail,isPoseTrail:!!(poseTrail&&poseTrail.length>1)};
+      tgCanvas.style.cursor='crosshair';  // signals the path is hover-scrubbable
+    }
     if (poseTrail&&poseTrail.length>1) animateTrail(mapKey,start,goal,poseTrail,true);
     else if (path&&path.length>1)      animateTrail(mapKey,start,goal,path,false);
     else drawTestGrid(mapKey,start,goal,null,0,null,true);
@@ -1347,7 +1437,22 @@ function drawDemoMap() {
     ctx.fillRect(cc*C,r*C,C,C);
     ctx.strokeStyle='rgba(255,255,255,.03)'; ctx.lineWidth=.5; ctx.strokeRect(cc*C,r*C,C,C);
   }
-  
+
+  // DWA candidate fan — the sampled trajectories DWA is weighing this cycle,
+  // drawn behind the path: chosen one bright, viable faint blue, blocked red.
+  if (s.algo==='dwa' && s.fan) {
+    for (const ray of s.fan) {
+      if (ray.pts.length<2) continue;
+      ctx.beginPath();
+      ctx.strokeStyle = ray.chosen ? 'rgba(93,202,165,0.95)'
+                      : ray.viable ? 'rgba(55,138,221,0.30)'
+                                   : 'rgba(226,75,74,0.28)';
+      ctx.lineWidth = ray.chosen ? Math.max(2,C*.12) : Math.max(1,C*.05);
+      ray.pts.forEach(([pr,pc],i)=>{ const x=pc*C+C/2,y=pr*C+C/2; i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
+      ctx.stroke();
+    }
+  }
+
   // A* drawing
   if (s.algo ==='astar' && s.explored) {
     for (const [key,v] of Object.entries(s.explored)) {
@@ -1746,20 +1851,38 @@ function stepDwa(s) {
     s.floatR=gr; s.floatC=gc;
     if (s.trail) s.trail.push([gr,gc]);
     s.robotPos=[gr,gc];
-    s.done=true;
+    s.done=true; s.fan=null;
     setDStat('d-status','goal reached','ok'); demoLog('DWA reached goal','ok'); stopDemo(); return;
   }
   const angle=Math.atan2(dr,dc), speed=Math.min(0.3,dist*.18);
   const candidates=[angle,angle+.35,angle-.35,angle+.7,angle-.7,angle+1.1,angle-1.1,angle+1.5,angle-1.5];
-  let moved=false;
-  for (const a of candidates) {
+
+  // Build the candidate "fan": roll each sampled heading out a few steps so
+  // the demo can render the trajectories DWA is weighing this cycle. The
+  // first collision-free candidate (straight-to-goal preferred) is chosen —
+  // same selection as before, just instrumented for the visualization.
+  const FAN_HORIZON=6;
+  s.fan=[];
+  let moved=false, chosenIdx=-1;
+  candidates.forEach((a,idx)=>{
     const nr=s.floatR+Math.sin(a)*speed, nc=s.floatC+Math.cos(a)*speed;
-    if (nr<.5||nr>=DEMO_ROWS-.5||nc<.5||nc>=DEMO_COLS-.5) continue;
-    if (lineClear(s.grid,s.floatR,s.floatC,nr,nc)) {
-      if (a!==angle) { s.replans++; setDStat('d-replans',s.replans); demoLog('DWA avoidance','warn'); }
-      s.floatR=nr; s.floatC=nc; s.headingAngle=a; moved=true; break;
+    const inBounds=!(nr<.5||nr>=DEMO_ROWS-.5||nc<.5||nc>=DEMO_COLS-.5);
+    const viable=inBounds&&lineClear(s.grid,s.floatR,s.floatC,nr,nc);
+    // trace the ray for display, stopping where it would hit an obstacle/edge
+    const pts=[[s.floatR,s.floatC]]; let rr=s.floatR, cc=s.floatC;
+    for (let k=0;k<FAN_HORIZON;k++){
+      const er=rr+Math.sin(a)*speed, ec=cc+Math.cos(a)*speed;
+      if (er<.5||er>=DEMO_ROWS-.5||ec<.5||ec>=DEMO_COLS-.5||!lineClear(s.grid,rr,cc,er,ec)) break;
+      rr=er; cc=ec; pts.push([rr,cc]);
     }
-  }
+    s.fan.push({pts,viable,chosen:false});
+    if (!moved&&viable) {
+      chosenIdx=idx;
+      if (a!==angle) { s.replans++; setDStat('d-replans',s.replans); demoLog('DWA avoidance','warn'); }
+      s.floatR=nr; s.floatC=nc; s.headingAngle=a; moved=true;
+    }
+  });
+  if (chosenIdx>=0) s.fan[chosenIdx].chosen=true;
   if (!moved) {
     s.stuckCount++;
     if (s.stuckCount>40) { s.done=true; setDStat('d-status','stuck','warn'); demoLog('DWA stuck','err'); stopDemo(); }

@@ -56,6 +56,7 @@ class DStarLitePlanner:
         self.U = U()
         self.g_values = {}
         self.rhs_values = {}
+        self.initialized = False
         
     def d_star_initialize(self, start, goal):
         self.k_m = 0
@@ -65,6 +66,17 @@ class DStarLitePlanner:
         self.g_values[goal] = float('inf')
         self.rhs_values[goal] = 0.0
         self.U.Insert(goal, self.calculate_key(goal, start))
+        self.initialized = True
+        self.goal = goal
+        self.s_last = start
+        
+    def update_vertex(self, u):
+        if u != self.goal:
+            succ = self.get_successors(u)
+            self.rhs_values[u] = min((self.cost(u, s) + self.g_values.get(s, float('inf')) for s in succ), default=float('inf'))
+        self.U.Remove(u)   # always drop the old entry first
+        if self.g_values.get(u, float('inf')) != self.rhs_values.get(u, float('inf')):
+            self.U.Insert(u, self.calculate_key(u, self.s_last))
         
     def set_occupancy_grid(self, grid):
         """Update the occupancy grid."""
@@ -102,7 +114,7 @@ class DStarLitePlanner:
         g = self.g_values.get(node, float('inf'))
         rhs = self.rhs_values.get(node, float('inf'))
         h = heuristic_backward(node, start)
-        k1 = min(g, rhs) + h
+        k1 = min(g, rhs) + h + self.k_m
         k2 = min(g, rhs)
         return (k1, k2)
     
@@ -125,6 +137,13 @@ class DStarLitePlanner:
             new_j = dir[1] + node[1]
             if not self.is_coord_valid(new_i, new_j): continue
             new_coord = (new_i, new_j)
+            # if new_coord not in self.occupancy_grid:
+            #     continue
+            if self.occupancy_grid[new_i][new_j] != 0:
+                continue
+            if abs(dir[0]) == 1 and abs(dir[1]) == 1:
+                if self.occupancy_grid[node[0] + dir[0]][node[1]] != 0 or self.occupancy_grid[node[0]][node[1] + dir[1]] != 0:
+                    continue
             successors.append(new_coord)
         return successors
 
@@ -137,22 +156,18 @@ class DStarLitePlanner:
             if k_old < k_new:
                 self.U.Update(u, k_new)
             elif self.g_values.get(u, float('inf')) > self.rhs_values.get(u, float('inf')):
+                # Overconsistent: g can drop to rhs. Make u consistent, drop it from
+                # the queue, then let its neighbours recompute against the new g(u).
                 self.g_values[u] = self.rhs_values[u]
                 self.U.Remove(u)
                 for s in self.get_successors(u):
-                    new_rhs = self.cost(s, u) + self.g_values[u]
-                    if new_rhs < self.rhs_values.get(s, float('inf')):
-                        if s != goal:
-                            self.rhs_values[s] = min(self.rhs_values.get(s, float('inf')), self.cost(s, u, self.occupancy_grid) + self.g_values.get(u, float('inf')))
-                        self.U.Update(s, self.calculate_key(s, start))
+                    self.update_vertex(s)
             else:
-                g_old = self.g_values.get(u, float('inf'))
+                # Underconsistent: g is stale. Raise it to inf FIRST, then update u
+                # itself and its neighbours so the cost increase propagates outward.
                 self.g_values[u] = float('inf')
                 for s in self.get_successors(u) + [u]:
-                    if self.rhs_values.get(s, float('inf')) == self.cost(s, u, self.occupancy_grid) + g_old:
-                        if s != goal:
-                            self.rhs_values[s] = min(self.rhs_values.get(s, float('inf')), min([self.cost(s, sp, self.occupancy_grid) + self.g_values.get(sp, float('inf')) for sp in self.get_successors(s)]))
-                    self.U.Update(s, self.calculate_key(s, start))
+                    self.update_vertex(s)
         return None
     
     def edge_changed(self):
@@ -187,12 +202,20 @@ class DStarLitePlanner:
             return None
         logger.info(f"Planning path from {start} to {goal} using D* Lite.")
         path = []
-        self.d_star_initialize(start, goal)
-        self.calculate_key(goal, start)
+        if not self.initialized or goal != self.goal:
+            # guard to prevent re-initialization on plan() call
+            self.d_star_initialize(start, goal)
+        else:
+            self.k_m += heuristic_backward(start, self.s_last)
+            self.s_last = start
+        #self.calculate_key(goal, start)
         self.compute_shortest_path(start, goal, self.occupancy_grid)
         edges_changed = self.edge_changed()
         
         if edges_changed:
+            for (u, v) in edges_changed:
+                self.update_vertex(u)
+                self.update_vertex(v)
             self.compute_shortest_path(start, goal, self.occupancy_grid)
         
         visited = set()

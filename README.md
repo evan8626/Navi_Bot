@@ -17,7 +17,7 @@ Navi Bot autonomously navigates a mapped environment, accepts pickup and deliver
 - **Mission management** via a state machine (IDLE → PICK_NAV → PICKING_UP → DELIVERY_NAV → DELIVERING → IDLE)
 - **Pose estimation** via wheel odometry with encoder feedback
 - **Obstacle detection** via LIDAR with DBSCAN clustering and costmap inflation
-- **Telemetry** via a web-based dashboard showing live robot pose and mapped environment
+- **Telemetry & tooling** via a desktop dashboard (Electron) with three tabs: a live WebSocket feed of robot pose and map, an interactive planner **Demo** (click to place start/goal, watch A*/D* Lite/DWA solve in real time), and a built-in **Test Runner** that streams results case-by-case and animates each planner driving across its actual occupancy grid
 
 ## Hardware
 
@@ -50,7 +50,7 @@ The STM32 handles real-time motor control and ultrasonic-based fallback obstacle
 |---|---|---|
 | Motion control / firmware | C++ | STM32 |
 | Planning, perception, state management | Python 3 | RDK X5 / ROS2 |
-| Telemetry dashboard | HTML / CSS / JavaScript | Web (Windows host) |
+| Telemetry dashboard | HTML / CSS / JavaScript (Electron) | Desktop (Windows host) |
 
 Communication between the STM32 and RDK X5 is over UART using a fixed-length binary packet protocol.
 
@@ -96,49 +96,75 @@ navi_bot/
     state_machine.py        # Mission state machine
 
 telemetry_dashboard/
-    index.html              # Dashboard UI (live telemetry + test runner tabs)
-    main.js                 # Data rendering and live stream handling
-    preload.js              # Button and navigation backend
+    index.html              # Dashboard UI — Live feed, interactive Demo, and Test Runner tabs
+    main.js                 # Electron main process — runs test subprocesses, native dialogs, IPC
+    preload.js              # contextBridge IPC API (runTest, listTests, stopTest, pickDir)
 
 tests/
-    AStar_planner_test.py
-    DStar_Lite_planner_test.py
-    DWA_planner_test.py
-    kinematics_test.py
-    lidar_mock_test.py
-    path_planner_test.py
-    pure_pursuit_test.py
-    state_machine_test.py
-    waypoint_nav_test.py    # End-to-end integration test across full navigation stack
+    AStar_planner_test.py          # A* unit tests + differential optimality vs reference Dijkstra
+    DStar_Lite_planner_test.py     # D* Lite unit + incremental-replan (k_m / edge-change) tests
+    DWA_planner_test.py            # DWA closed-loop avoidance tests
+    astar_dwa_integration_test.py  # A* plans a global path, DWA follows it (global + local)
+    dstar_dwa_integration_test.py  # D* Lite plans + replans, DWA follows the updated path
+    waypoint_nav_test.py           # End-to-end mission run across the full navigation stack
+    kinematics_test.py             # Differential drive forward/inverse kinematics invariants
+    motion_controller_test.py      # PID terms, anti-windup, and closed-loop convergence
+    pure_pursuit_test.py           # Pure Pursuit steering/lookahead invariants
+    odometry_test.py               # Wheel odometry dead-reckoning and velocity estimation
+    lidar_mock_test.py             # Scan processing, clustering, and costmap inflation
+    geometry_test.py               # Transform, distance, collision, and interpolation utilities
+    profiler_test.py               # Timing, deadline tracking, and statistics
+    path_planner_test.py           # Path planner node integration
+    state_machine_test.py          # Mission state machine transitions
+    imu_test.py                    # spec ahead of implementation (IMU module in progress)
+    websocket_test.py              # spec ahead of implementation (telemetry server)
 ```
 
-## Running the Tests
+## Testing
 
-Each test module is a standalone script runnable without a ROS2 installation:
+Each test module is a standalone script runnable without a ROS2 installation. The mock ROS2 layer (`mock_ros2.py`) provides a lightweight message bus so components communicate through publishers and subscribers exactly as they would on real hardware.
 
 ```bash
-python tests/AStar_planner_test.py
-python tests/waypoint_nav_test.py
-# etc.
+python tests/AStar_planner_test.py          # run a whole suite
+python tests/AStar_planner_test.py 7        # run a single test (1-indexed)
+python tests/AStar_planner_test.py --list   # list a suite's test cases
 ```
 
-The mock ROS2 layer (`mock_ros2.py`) provides a lightweight message bus so components communicate through publishers and subscribers exactly as they would on real hardware.
+The test approach mixes a few styles:
+
+- **Unit / invariant tests** check each module against physical and mathematical invariants (e.g. kinematics round-trips, PID anti-windup).
+- **Differential tests** validate planner output against an independent reference (A*/D* Lite paths are checked for cost-optimality and corner safety against a reference Dijkstra implemented inside the test).
+- **Integration tests** exercise the full global + local stack: A* or D* Lite plans a route, DWA follows it with a lookahead controller, and the suite asserts the robot reaches the goal without collisions — including a moving-obstacle dodge and D* Lite incremental replanning when the map changes.
+
+The whole suite also runs in the Electron dashboard's **Test Runner** tab, which streams output one case at a time, badges pass/fail per suite, draws each planner's path animating across its real occupancy grid, and lets you hover the grid to scrub the robot back and forth along a finished run. CI runs the active suites on every push via GitHub Actions.
+
+### Running the dashboard
+
+```bash
+cd telemetry_dashboard
+npm install
+npm start
+```
 
 ## Status
 
 | Component | Status |
 |---|---|
 | A* planner | Complete, tested |
-| D* Lite planner | Complete, tested |
+| D* Lite planner | Complete, tested (incremental replanning) |
 | DWA planner | Complete, tested |
 | Pure Pursuit | Complete, tested |
 | Kinematics | Complete, tested |
+| Motion controller (PID) | Complete, tested |
 | State machine | Complete, tested |
 | Path planner node | Complete, tested |
 | Wheel odometry | Complete, tested |
 | LIDAR processor | Complete, tested |
+| Geometry / profiler utilities | Complete, tested |
+| Global + local integration (A*/D* Lite → DWA) | Complete, tested |
 | Waypoint nav integration | Complete, tested |
+| Telemetry dashboard | Functional (live feed, demo, test runner) |
+| IMU processor | In progress (test spec written) |
+| WebSocket telemetry server | In progress (test spec written) |
 | STM32 firmware (SimpleFOC) | Not started |
 | UART protocol | Designed, not implemented |
-| IMU processor | Stub |
-| Telemetry dashboard | Stub |

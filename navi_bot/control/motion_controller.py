@@ -159,7 +159,7 @@ class MotionController:
         dy = goal_y - y
         distance = np.sqrt(dx**2 + dy**2)
 
-        if ditance > self.goal_tolerance:
+        if distance > self.goal_tolerance:
             return False
         
         if goal_theta is not None:

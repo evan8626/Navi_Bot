@@ -130,19 +130,26 @@ def test_already_at_goal():
     passed = False
     logger.info("TEST 5: Start and Goal are same coordinates.")
     a_star = setup_AStar()
-    
+
     start = (0, 7)
-    goal = (0, 7) 
-    
+    goal = (0, 7)
+
     a_star.set_occupancy_grid(clear_map())
     tester = a_star.plan(start, goal)
-    if tester is None:
-        logger.info("The planner immediate returned that robot is at goal")
+    # Contract: at-goal returns a trivial path (no movement) — [start] or [] —
+    # NOT None (None is reserved for genuine failure). Accept either trivial
+    # form; reject None and any real multi-cell path.
+    if tester is not None and len(tester) <= 1:
+        logger.info(f"The planner returned a trivial at-goal path: {tester}")
         logger.info("PASS")
         passed = True
         return passed
+    elif tester is None:
+        logger.warning("Planner returned None for at-goal; expected a trivial path [start] or [].")
+        logger.warning("FAIL")
+        return passed
     else:
-        logger.warning("Path still created even though start and goal are the same.")
+        logger.warning(f"Path still created even though start and goal are the same: {tester}")
         logger.warning("FAIL")
         return passed
 

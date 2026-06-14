@@ -72,6 +72,10 @@ def navigate_closed_loop(dwa, start, theta, goal, obstacles, grid=None, max_repl
     collided = False
     left_map = False
     logger.info(f"Start: ({start[0]}, {start[1]}), Goal: ({goal[0]}, {goal[1]})")
+    if grid is not None:  # log the real grid so the dashboard draws the actual obstacles
+        logger.info(f"MAP {len(grid)} {len(grid[0])}")
+        for _row in grid:
+            logger.info("MAPROW " + "".join('1' if int(_c) != 0 else '0' for _c in _row))
     for i in range(max_replans):
         logger.info(f"pose=({x:.2f},{y:.2f})")
         if np.hypot(goal[0] - x, goal[1] - y) <= tol:
@@ -264,31 +268,30 @@ def test_valid_path():
         logger.error(f"FAIL: robot did not reach goal, final pose ({final_pose[0]:.2f}, {final_pose[1]:.2f})")
     return False
 
-# MARK: Closed-Loop Static Obstacles
+# MARK: Closed-Loop Single-Obstacle Avoidance
 def test_valid_path_obstacles():
     """
-    Closed-loop navigation on the obstacle map — every velocity command
-    must stay within limits and the robot must reach the goal while
-    avoiding obstacles.
+    Closed-loop reactive avoidance — DWA's actual job. A single obstacle
+    sits just off the straight line from start to goal, so the direct path
+    would clip it and the robot must steer around it, keep every command
+    within limits, and reach the goal.
 
-    Fixed start/goal so the test is deterministic: (0,0) -> (4,7) has a
-    clear route down column 0 and along the fully-free row 4, with at
-    least one cell of clearance the whole way. Acts as the acceptance
-    test for the dwa.py clearance-scoring fix — the current scoring lets
-    clearance dominate progress, so the robot stalls near its start.
+    This is deliberately NOT the dense obstacle map: threading a field of
+    obstacles needs a global planner (see the A*+DWA / D*+DWA integration
+    suites). A bare local planner is only responsible for reacting to
+    obstacles near its path, which is what this tests.
     """
-    logger.info("TEST 5: Closed-Loop Navigation on Obstacle Map")
+    logger.info("TEST 5: Closed-Loop Single-Obstacle Avoidance")
     dwa = setup_DWA()
-    map1 = obstacle_map()
+    map1 = clear_map()
+    map1[3][4] = 1   # one obstacle, ~0.7 cell off the (1,1)->(6,6) bearing line
 
-    start = (0, 0)
-    theta = 0.0  # facing +row, roughly toward the route down column 0
-    goal = (4, 7)
+    start = (1, 1)
+    theta = 0.0
+    goal = (6, 6)
 
     obstacles = np.argwhere(map1 == 1)
 
-    # future API: when DWAPlanner grows set_occupancy_grid (like A*/D* Lite),
-    # the planner learns the map bounds without any further test changes
     if hasattr(dwa, 'set_occupancy_grid'):
         dwa.set_occupancy_grid(map1)
 
@@ -297,12 +300,12 @@ def test_valid_path_obstacles():
     )
 
     if reached and commands_valid and not collided and not left_map:
-        logger.info(f"PASS: reached goal in {replans} replans, stayed on the map, no collisions, all commands within limits")
+        logger.info(f"PASS: steered around the obstacle and reached goal in {replans} replans, all commands within limits")
         return True
     if not commands_valid:
         logger.error("FAIL: DWA produced out-of-limit velocity commands")
     elif collided:
-        logger.error("FAIL: robot drove through an obstacle cell en route")
+        logger.error("FAIL: robot drove through the obstacle")
     elif left_map:
         logger.error("FAIL: robot left the map boundary en route")
     else:

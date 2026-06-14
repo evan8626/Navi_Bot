@@ -191,6 +191,11 @@ def run_mission(sm, planner, pursuit, odom, grid, mission, log_prefix=""):
     # Set map
     planner.map_callback(grid)
 
+    # Log the occupancy grid so the dashboard draws the real obstacles
+    logger.info(f"MAP {len(grid)} {len(grid[0])}")
+    for _row in grid:
+        logger.info("MAPROW " + "".join('1' if int(_c) != 0 else '0' for _c in _row))
+
     # Assign mission and advance state machine to PICK_NAV
     sm.add_mission(mission)
     sm.update_state_machine()  # IDLE -> PICK_NAV

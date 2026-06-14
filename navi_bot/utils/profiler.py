@@ -70,7 +70,7 @@ class PerforamnceProfiler:
         if task_name not in self.execution_times:
             return None
         
-        times = List(self.execution_times[task_name])
+        times = list(self.execution_times[task_name])
 
         stats = {
             'mean': np.mean(times),

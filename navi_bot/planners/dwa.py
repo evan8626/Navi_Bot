@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 ROBOT_RADIUS = 0.25 # meters
 CELL_RADIUS = 0.5 # meters
 GRID_RESOLUTION = 0.05 # meters
+CLEARANCE_CAP = 1.5
 
 class DWAPlanner:
     """
@@ -43,7 +44,7 @@ class DWAPlanner:
         # Scoring weights
         self.heading_weight = 1.0
         self.speed_cost_gain = 1.0
-        self.obstacle_cost_gain = 0.5
+        self.obstacle_cost_gain = 1.0
         
         self.grid_resolution = GRID_RESOLUTION
         self.occupancy_grid = None
@@ -79,6 +80,9 @@ class DWAPlanner:
         rows = len(self.occupancy_grid)
         cols = len(self.occupancy_grid[0])
         return (-0.5 + ROBOT_RADIUS <= x <= rows - 0.5 - ROBOT_RADIUS and -0.5 + ROBOT_RADIUS <= y <= cols - 0.5 - ROBOT_RADIUS)
+    
+    def norm(self, x, hi, lo):
+        return (x - lo) / (hi - lo) if hi > lo else 0.0
         
     def plan(self, current_pose, current_vel, goal, obstacles):
         """
@@ -114,7 +118,7 @@ class DWAPlanner:
         num_steps = int(time_horizon / step_time)
         
         v_min, v_max, omega_min, omega_max, = self.compute_dynamic_window(current_vel, control_period)
-        kinematics = {}
+        candidates = []
         
         for v in np.linspace(v_min, v_max, 20):
             for omega in np.linspace(omega_min, omega_max, 40):
@@ -135,12 +139,31 @@ class DWAPlanner:
                 score = self.score_trajectory(vel, goal, obstacles, positional_info)
                 if score is None:
                     continue
-                kinematics.update({vel: score})
-        if not kinematics:
+                candidates.append((v, omega, score[0], score[1], score[2]))  # v, omega, heading, clearance, speed
+        if not candidates:
             return (0.0, 0.0)
-        best_v, best_omega = max(kinematics, key=kinematics.get)
         
-        return (best_v, best_omega)
+        # Pull each term into its own column, then normalize across candidates.
+        h  = [c[2] for c in candidates]
+        cl = [c[3] for c in candidates]
+        sp = [c[4] for c in candidates]
+        hmax, hmin = max(h), min(h)
+        clmax, clmin = max(cl), min(cl)
+        spmax, spmin = max(sp), min(sp)
+
+        # Score every surviving candidate and keep the single best. Heading is
+        # an error (lower = better -> reward 1 - norm); clearance and speed are
+        # rewards (higher = better -> norm directly).
+        best_cmd = (0.0, 0.0)
+        best_score = float('-inf')
+        for v_c, omega_c, heading_c, clearance_c, speed_c in candidates:
+            s = (self.heading_weight    * (1 - self.norm(heading_c, hmax, hmin))
+               + self.obstacle_cost_gain * self.norm(clearance_c, clmax, clmin)
+               + self.speed_cost_gain    * self.norm(speed_c, spmax, spmin))
+            if s > best_score:
+                best_score = s
+                best_cmd = (v_c, omega_c)
+        return best_cmd
     
     def compute_dynamic_window(self, current_vel, dt):
         """
@@ -193,15 +216,12 @@ class DWAPlanner:
             if not self.is_pose_inbounds(x, y):
                 return None
             
-            if obstacles.size == 0:
-                min_clearance = min(min_clearance, 10.0)
-            else:
-                for obstacle in obstacles:
-                    clear = heuristic_forward((x, y), obstacle)
-                    if clear < contact:
-                        return None
-                    min_clearance = min(min_clearance, clear)
-        
+            for obstacle in obstacles:
+                clear = heuristic_forward((x, y), obstacle)
+                if clear < contact:
+                    return None
+                min_clearance = min(min_clearance, clear)
+        min_clearance = min(min_clearance, CLEARANCE_CAP)
         braking_room = max(0.0, min_clearance - contact)
         if abs(vel[0]) > np.sqrt(2.0 * braking_room * self.max_accel_x):
             return None
@@ -209,7 +229,7 @@ class DWAPlanner:
         _, _, final_theta = pos[-1]
         heading = abs(normalize_angle(angle_between_points((pos[-1][0], pos[-1][1]), goal) - final_theta))
         
-        return (-(self.heading_weight * heading) - self.obstacle_cost_gain * (1.0 / min_clearance)) + (self.speed_cost_gain * vel[0])
+        return (heading, min_clearance, vel[0])#(-(self.heading_weight * heading) - self.obstacle_cost_gain * (1.0 / min_clearance)) + (self.speed_cost_gain * vel[0])
 
 def heuristic_forward(pos, goal):
     """Euclidian distance heuristic."""

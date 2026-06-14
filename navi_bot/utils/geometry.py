@@ -51,6 +51,9 @@ def inverse_transform_point(point, pose):
     # Rotation matrix
     cos_t = np.cos(-theta)
     sin_t = np.sin(-theta)
+    
+    dx = px - x
+    dy = py - y
 
     sx = cos_t * dx - sin_t * dy
     sy = sin_t * dx + cos_t * dy
@@ -88,7 +91,7 @@ def point_to_line_distance(point, line_start, line_end):
         Minimum distance from point to line segment
     """
     px, py = point
-    x1, y2 = line_start
+    x1, y1 = line_start
     x2, y2 = line_end
 
     # line vector
@@ -143,7 +146,7 @@ def point_in_polygon(point, polygon):
             if y <= max(p1y, p2y):
                 if x <= max(p1x, p2x):
                     if p1y != p2y:
-                        xinters = (y - p1y) * (p2x - p1x) / (p2y - p2y) + p1x
+                        xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x 
                     if p1x == p2x or x <= xinters:
                         inside = not inside
         p1x, p1y = p2x, p2y
@@ -170,7 +173,7 @@ def interpolate_path(waypoints, resolution=0.1):
         p1 = waypoints[i]
         p2 = waypoints[i + 1]
 
-        dist = distance(p1, 2)
+        dist = distance(p1, p2)
         num_points = int(dist / resolution)
 
         for j in range(1, num_points):

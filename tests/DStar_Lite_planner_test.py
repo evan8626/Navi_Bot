@@ -548,19 +548,19 @@ def test_incremental_replan_updates_km():
     logger.info("TEST 13: Incremental replan must accumulate k_m (search state reuse)")
     d_star = setup_DStar_Lite()
     grid_a = clear_map()
-    start, goal = (0, 0), (7, 7)
+    start, goal = (0, 0), (0, 7)
     d_star.set_occupancy_grid(grid_a)
     path1 = d_star.plan(start, goal)
-    if path1 is None or len(path1) < 6:
+    if path1 is None or len(path1) < 4:
         logger.warning("  FAIL initial plan missing or too short to stage the scenario")
         logger.info("FAIL")
         return False
 
-    # Robot advances two steps, then discovers an obstacle further along
-    new_start = tuple(path1[2])
-    blocked = tuple(path1[4])
+    # Robot advances a couple steps; a wall then appears across the route ahead.
+    new_start = tuple(path1[min(2, len(path1) - 2)])
     grid_b = clear_map()
-    grid_b[blocked[0]][blocked[1]] = 1
+    grid_b[0][4] = 1
+    grid_b[1][4] = 1
     d_star.set_occupancy_grid(grid_b)
     path2 = d_star.plan(new_start, goal)
 

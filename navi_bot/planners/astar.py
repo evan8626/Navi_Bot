@@ -19,6 +19,8 @@ import heapq
 
 logger = logging.getLogger(__name__)
 
+SQRT2 = math.sqrt(2)
+
 class AStarPlanner:
     """
     A* path planner on occupancy grid
@@ -78,7 +80,7 @@ class AStarPlanner:
             return None
         elif heuristic_forward(start, goal) == 0:
             logger.info("Already at goal. No path needed.")
-            return None
+            return [start]
             
         # h = estimated cost to get from node n to goal (heuristic)
         # g = cost to reach node n from start node 
@@ -100,15 +102,25 @@ class AStarPlanner:
             return None
         
         while len(open_list) > 0:
-            p = heapq.heappop(open_list)
-            visited_coord = p[1]
+            f, visited_coord = heapq.heappop(open_list)
+            if visited_coord in closed_list:
+                continue
             closed_list.add(visited_coord)
             
+            if visited_coord == goal:
+                path = []
+                current = goal
+                
+                while current is not None:
+                    path.append(current)
+                    current = parent_dict[current]
+                path.reverse()
+                return path
+                
             for dir in directions:
                 new_i = dir[0] + visited_coord[0]
                 new_j = dir[1] + visited_coord[1]
-                if abs(dir[0]) == 1 and abs(dir[1]) == 1: g_value = np.sqrt(2)
-                else: g_value = 1.0
+                
                 new_coord = (new_i, new_j)
                 
                 if not self.is_coord_valid(new_i, new_j):
@@ -119,32 +131,27 @@ class AStarPlanner:
                     # cell is occupied so skip it
                     continue
                 
-                if new_coord == goal:
-                    parent_dict[goal] = visited_coord
-                    path = []
-                    current = goal
-                    
-                    while current is not None:
-                        path.append(current)
-                        current = parent_dict[current]
-                    path.reverse()
-                    return path
-                else:
-                    h = heuristic_forward(new_coord, goal)
-                    g = cost_dict[visited_coord] + g_value
-                    f = g + h
-                    if new_coord in cost_dict:
-                        if g < cost_dict[new_coord]:
-                            cost_dict[new_coord] = g
-                            parent_dict[new_coord] = visited_coord
-                            heapq.heappush(open_list, (f, new_coord))
-                    else:
+                if abs(dir[0]) == 1 and abs(dir[1]) == 1: 
+                    if self.occupancy_grid[visited_coord[0] + dir[0]][visited_coord[1]] != 0 or self.occupancy_grid[visited_coord[0]][visited_coord[1] + dir[1]] != 0:
+                        continue
+                    g_value = SQRT2 
+                else: g_value = 1.0
+                
+                h = heuristic_forward(new_coord, goal)
+                g = cost_dict[visited_coord] + g_value
+                f = g + h
+                if new_coord in cost_dict:
+                    if g < cost_dict[new_coord]:
                         cost_dict[new_coord] = g
                         parent_dict[new_coord] = visited_coord
                         heapq.heappush(open_list, (f, new_coord))
+                else:
+                    cost_dict[new_coord] = g
+                    parent_dict[new_coord] = visited_coord
+                    heapq.heappush(open_list, (f, new_coord))
                         
         return None
 
 def heuristic_forward(pos, goal):
     """Euclidian distance heuristic."""
-    return np.sqrt((pos[0] - goal[0])**2 + (pos[1] - goal[1])**2)
+    return math.sqrt((pos[0] - goal[0])**2 + (pos[1] - goal[1])**2)
