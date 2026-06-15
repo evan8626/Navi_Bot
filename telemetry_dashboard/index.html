@@ -492,6 +492,15 @@ const NO_PATH_SUITES = new Set([
   'odometry_test.py','imu_test.py',
 ]);
 
+// Suites whose tests log their REAL grid ("MAP"/"MAPROW"). For these we hold the
+// live grid draw until that grid (or the pose trail) has streamed in, so we don't
+// flash the planned path on a keyword-guessed (usually clear) map before the
+// actual obstacles arrive — the path is logged before the grid in these suites.
+const LOGGED_GRID_SUITES = new Set([
+  'astar_dwa_integration_test.py','dstar_dwa_integration_test.py',
+  'DWA_planner_test.py','waypoint_nav_test.py',
+]);
+
 function inferMapKey(lines, file) {
   const joined = lines.map(l=>l.text).join(' ').toLowerCase();
   const is20 = /waypoint|mission|pickup|delivery/.test(file+joined);
@@ -526,8 +535,13 @@ function resolveMapKey(lines, file) {
 function mapLabelOf(k) { return k==='__logged'?'test':k.replace(/\d+/,'').trim(); }
 
 const COORD_NUM='(-?\\d+(?:\\.\\d+)?)';
-const startRe=new RegExp('start[^:(]*[:(]+\\s*\\(?'+COORD_NUM+'[,\\s]+'+COORD_NUM,'i');
-const goalRe =new RegExp('(?:goal|delivery)[^:(]*[:(]+\\s*\\(?'+COORD_NUM+'[,\\s]+'+COORD_NUM,'i');
+// The gap between the keyword and the coord delimiter excludes commas so a
+// result line like "did not reach goal, final pose (3.92, 2.36)" isn't mistaken
+// for a goal declaration — the comma right after "goal" stops the match before
+// it reaches the "(" of the pose. Real declarations ("Goal: (7,6)",
+// "delivery (7,2)", "Goal coords are: 7,6") have no comma before their ":"/"(".
+const startRe=new RegExp('start[^:(,]*[:(]+\\s*\\(?'+COORD_NUM+'[,\\s]+'+COORD_NUM,'i');
+const goalRe =new RegExp('(?:goal|delivery)[^:(,]*[:(]+\\s*\\(?'+COORD_NUM+'[,\\s]+'+COORD_NUM,'i');
 function inferStartGoal(lines) {
   let start=null, goal=null;
   for (const l of lines) {
@@ -941,6 +955,11 @@ function liveGridUpdate(file) {
   const path=inferPath(caseLines);
   const poseTrail=inferPoseTrail(caseLines);
   tgHazardTrail=inferHazardTrail(caseLines);
+  // For grid-logging suites the planned path (X:/Y:) streams in before the grid
+  // AND before the robot moves — drawing it would flash the path on the map (a
+  // guessed clear map first, then the real one) ahead of the pose animation.
+  // Only the pose trail is worth animating here, so wait for it before drawing.
+  if (LOGGED_GRID_SUITES.has(file) && !poseTrail) return;
   const trail=poseTrail||path;
   if (!trail||trail.length<2) return; // nothing drawable yet — keep current view
   let {start,goal}=inferStartGoal(caseLines);
@@ -1046,12 +1065,9 @@ function stopRun() {
   const file=activeRun;
   stopRequested=true;
   window._runDoneCb=null; // halt a run-all chain
-  if (window.navi&&window.navi.stopTest) {
-    window.navi.stopTest(file); // kill → 'close' → test:done → drain → finishRun
-  } else {
-    _resetStream(file);
-    finishRun(file,-1);
-  }
+  if (window.navi&&window.navi.stopTest) window.navi.stopTest(file); // kill the process
+  _resetStream(file);  // drop the still-buffered output so the stream halts NOW,
+  finishRun(file,-1);  // and finalize immediately — the process's later 'close' is ignored
 }
 function runAll() {
   const runnable=TEST_FILES.filter(t=>t.status!=='todo');
@@ -1108,6 +1124,7 @@ function finishRun(file,exitCode) {
   const wasStopped=stopRequested;
   activeRun=null; activeRunTest=null; stopRequested=false; liveFollow=false;
   const result=runResults[file]; if(!result) return;
+  if (result.exit!==null) return; // already finalized (e.g. a stop raced the process close)
   result.ms=Date.now()-result.t0;
   result.exit=exitCode;
   result.stopped=wasStopped;
@@ -1261,7 +1278,13 @@ function _drainLines(file) {
     finishRun(file, code);
   }
 }
+// Per-cell planning noise some planners emit (D* Lite logs one
+// "Cell at row R, col C is occupied." per cell it inspects — thousands per run).
+// It isn't parsed for anything; dropping it keeps the terminal readable and the
+// stream fast. Widen/relax this regex if you want that chatter back.
+const _NOISE_RE = /^Cell at row -?\d+, col -?\d+ is occupied\.?\s*$/;
 function _bufferLine(file, parsed) {
+  if (_NOISE_RE.test(parsed.text)) return;
   (_lineBuffer[file] = _lineBuffer[file] || []).push(parsed);
   _scheduleFlush(file, LINE_DELAY);
 }

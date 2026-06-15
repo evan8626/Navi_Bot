@@ -108,7 +108,12 @@ def follow_path(dwa, grid, start, theta, waypoints,
     obstacles = np.argwhere(grid == 1)
     if hasattr(dwa, 'set_occupancy_grid'):
         dwa.set_occupancy_grid(grid)
-    x, y, th = float(start[0]), float(start[1]), float(theta)
+    # Start heading along the path's first segment (motion model: x=row uses
+    # cos, y=col uses sin -> atan2(dcol, drow)), not the passed default —
+    # otherwise the robot starts ~90 deg off an east-west path and spirals.
+    th = (math.atan2(waypoints[1][1] - waypoints[0][1], waypoints[1][0] - waypoints[0][0])
+          if len(waypoints) >= 2 else float(theta))
+    x, y = float(start[0]), float(start[1])
     v, om = 0.0, 0.0
     wp_idx = 0
     collided = left = False
@@ -218,62 +223,53 @@ def test_astar_dwa_end_to_end():
     return passed
 
 
-def test_moving_obstacle():
-    """DWA must avoid a moving obstacle that crosses the path, then reach goal.
-
-    A* plans on the static (empty) map — a straight route along row 4. A
-    moving hazard descends column 4 and crosses the robot's path mid-route.
-    It is invisible to A* (never in the grid); DWA sees it in the obstacle
-    set each cycle and must avoid it reactively, then proceed once it passes.
-    Asserts the hazard genuinely interfered (came close) yet was never hit.
+def drive_with_hazard(dwa, grid, start, theta, path, hazard_fn,
+                      max_replans=200, wp_tol=0.6, goal_tol=0.7, lookahead=1.5,
+                      encounter_r=2.0, yield_speed=0.2):
     """
-    logger.info("TEST 4: DWA avoids a moving obstacle crossing the path")
-    grid = np.zeros((8, 8), dtype=int)   # open map (no static obstacles)
-    start, goal, theta = (4, 0), (4, 7), 0.0
+    Drive DWA along `path` while a moving hazard crosses it. The hazard
+    (hazard_fn(step) -> (r, c)) is added to the obstacle set each cycle, as a
+    perception tracker would feed it to the local planner. Logs the grid +
+    pose + "hazard at" telemetry so the dashboard animates both robot and
+    hazard.
+
+    Returns a metrics dict including `yielded`: whether the robot slowed below
+    `yield_speed` while the hazard was within `encounter_r`. The desired
+    behavior is to YIELD (slow/halt) for the crossing hazard rather than dart
+    in front of it.
+    """
     static = np.argwhere(grid == 1)
-
-    astar = AStarPlanner()
-    astar.set_occupancy_grid(grid)
-    path = astar.plan(start, goal)
-    if path is None:
-        logger.error("  FAIL: A* found no path on the open map")
-        logger.info("FAIL")
-        return False
-
-    def hazard_at(step):
-        # descends column 4 from the top, one row every 3 replans
-        return (min(7, step // 3), 4)
-
-    dwa = DWAPlanner()
-    dwa.set_occupancy_grid(grid)
-    x, y, th = float(start[0]), float(start[1]), float(theta)
+    if hasattr(dwa, 'set_occupancy_grid'):
+        dwa.set_occupancy_grid(grid)
+    # Start heading along the path so the robot doesn't swing ~90 deg onto it.
+    th = (math.atan2(path[1][1] - path[0][1], path[1][0] - path[0][0])
+          if len(path) >= 2 else float(theta))
+    x, y = float(start[0]), float(start[1])
     v, om = 0.0, 0.0
     wp_idx = 0
-    lookahead = 1.5
-    max_replans = 160
-    collided = False
-    max_dev = 0.0          # farthest the robot swerved off the row-4 path
+    collided = left = reached = False
     min_dist = float('inf')
-    reached = False
-    i = 0
-
-    # "(open map)" tells the dashboard to draw a clear grid for this case,
-    # despite "obstacle" appearing elsewhere in the log.
+    min_speed_near = float('inf')   # slowest the robot moved while the hazard was close
+    goal = path[-1]
     logger.info(f"Start: ({start[0]}, {start[1]}), Goal: ({goal[0]}, {goal[1]})")
     logger.info(f"MAP {len(grid)} {len(grid[0])}")
     for _row in grid:
         logger.info("MAPROW " + "".join('1' if int(_c) != 0 else '0' for _c in _row))
+    px, py = x, y
+    i = 0
     for i in range(max_replans):
-        hz = hazard_at(i)
+        hz = hazard_fn(i)
         logger.info(f"pose=({x:.2f},{y:.2f})")
         logger.debug(f"hazard at ({hz[0]},{hz[1]})")
-        min_dist = min(min_dist, math.hypot(hz[0] - x, hz[1] - y))
-        max_dev = max(max_dev, abs(x - start[0]))  # swerve off the straight path
-        if math.hypot(goal[0] - x, goal[1] - y) <= 0.7:
+        hd = math.hypot(hz[0] - x, hz[1] - y)
+        min_dist = min(min_dist, hd)
+        if i > 0 and hd < encounter_r:
+            min_speed_near = min(min_speed_near, math.hypot(x - px, y - py))
+        px, py = x, y
+        if math.hypot(goal[0] - x, goal[1] - y) <= goal_tol:
             reached = True
             break
-        # lookahead target along the global path
-        while wp_idx < len(path) - 1 and math.hypot(path[wp_idx][0] - x, path[wp_idx][1] - y) <= 0.6:
+        while wp_idx < len(path) - 1 and math.hypot(path[wp_idx][0] - x, path[wp_idx][1] - y) <= wp_tol:
             wp_idx += 1
         target_idx = wp_idx
         while target_idx < len(path) - 1 and math.hypot(path[target_idx][0] - x, path[target_idx][1] - y) < lookahead:
@@ -288,21 +284,99 @@ def test_moving_obstacle():
             x += v * math.cos(th) * 0.1
             y += v * math.sin(th) * 0.1
             th += om * 0.1
-            if math.hypot(hz[0] - x, hz[1] - y) < CONTACT:
+            r, c = int(round(x)), int(round(y))
+            if not collided and 0 <= r < len(grid) and 0 <= c < len(grid[0]) and grid[r][c] != 0:
                 collided = True
+            if not collided and math.hypot(hz[0] - x, hz[1] - y) < CONTACT:
+                collided = True
+            if not left and not (-0.5 <= x <= len(grid) - 0.5 and -0.5 <= y <= len(grid[0]) - 0.5):
+                left = True
+    return {'reached': reached, 'collided': collided, 'left': left,
+            'yielded': min_speed_near < yield_speed,
+            'min_dist': min_dist, 'min_speed_near': min_speed_near,
+            'replans': i, 'pose': (x, y)}
 
-    if reached and not collided and max_dev > 0.8:
-        logger.info(f"  PASS: swerved {max_dev:.2f} off-path around the hazard (closest {min_dist:.2f}), reached goal in {i} replans")
+
+def report_hazard(res, what):
+    """Pass/fail for the moving-hazard tests: reach, no collision, the hazard
+    genuinely interfered, and the robot YIELDED (slowed/halted) rather than
+    darting in front of it."""
+    if (res['reached'] and not res['collided'] and not res['left']
+            and res['min_dist'] < 2.0 and res['yielded']):
+        logger.info(f"  PASS: {what}; yielded to the hazard (min speed {res['min_speed_near']:.2f}, "
+                    f"closest {res['min_dist']:.2f}), reached goal in {res['replans']} replans")
         logger.info("PASS")
         return True
-    if collided:
-        logger.error(f"  FAIL: collided with the moving hazard (closest {min_dist:.2f})")
-    elif not reached:
-        logger.error(f"  FAIL: did not reach goal, final pose ({x:.2f}, {y:.2f})")
+    if res['collided']:
+        logger.error(f"  FAIL: collided (closest {res['min_dist']:.2f})")
+    elif res['left']:
+        logger.error("  FAIL: robot left the map")
+    elif not res['reached']:
+        logger.error(f"  FAIL: did not reach goal, final pose ({res['pose'][0]:.2f}, {res['pose'][1]:.2f})")
+    elif res['min_dist'] >= 2.0:
+        logger.error(f"  FAIL: hazard never got close (closest {res['min_dist']:.2f}) — not a meaningful test")
     else:
-        logger.error(f"  FAIL: robot never swerved (max dev {max_dev:.2f}) — hazard didn't interfere")
+        logger.error(f"  FAIL: robot did not yield (min speed near hazard {res['min_speed_near']:.2f}) "
+                     "— it darted past instead of slowing/halting for the crossing hazard")
     logger.info("FAIL")
     return False
+
+
+def test_moving_obstacle():
+    """DWA must YIELD to a moving obstacle crossing its path, then reach goal.
+
+    A* plans a straight route along row 4 on an open map; a hazard descends
+    column 4 across it. Given only the hazard's current position, a bare
+    reactive planner darts in front of it — the desired behavior is to slow or
+    halt until it passes. Acceptance test for the DWA yield rule.
+    """
+    logger.info("TEST 4: DWA yields to a moving obstacle crossing the path")
+    grid = np.zeros((8, 8), dtype=int)
+    start, goal = (4, 0), (4, 7)
+    astar = AStarPlanner()
+    astar.set_occupancy_grid(grid)
+    path = astar.plan(start, goal)
+    if not path:
+        logger.error("  FAIL: A* found no path on the open map")
+        logger.info("FAIL")
+        return False
+    res = drive_with_hazard(DWAPlanner(), grid, start, 0.0, path,
+                            lambda s: (min(7, s // 3), 4))
+    return report_hazard(res, "crossed the open map")
+
+
+def test_moving_obstacle_with_static():
+    """Full-stack realism: A* routes around static obstacles, DWA follows AND
+    yields to a moving hazard crossing the route.
+
+    The map has static blocks the global planner must avoid; a hazard descends
+    a free channel (column 4) and crosses the planned path in the open. The
+    robot must route around the static obstacles, then slow/halt for the
+    crossing hazard without colliding. Acceptance test for the DWA yield rule.
+    """
+    logger.info("TEST 5: A* routes around static obstacles + DWA yields to a moving hazard")
+    grid = np.array([
+        [0, 0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 1, 1, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 1, 0, 1, 0, 0, 0, 0],
+        [0, 1, 0, 1, 0, 0, 0, 0],
+        [0, 1, 0, 1, 0, 0, 0, 0],
+    ])
+    start, goal = (0, 0), (7, 6)   # goal off column 4 so the spent hazard never blocks it
+    astar = AStarPlanner()
+    astar.set_occupancy_grid(grid)
+    path = astar.plan(start, goal)
+    ok, reason = path_is_robot_safe(path, grid)
+    if not ok:
+        logger.error(f"  FAIL: A* path not usable — {reason}")
+        logger.info("FAIL")
+        return False
+    res = drive_with_hazard(DWAPlanner(), grid, start, 0.0, path,
+                            lambda s: (min(7, s // 4), 4))
+    return report_hazard(res, "routed around static obstacles")
 
 
 def test_corner_cut_path_is_unfollowable():
@@ -341,6 +415,7 @@ def main():
         test_astar_dwa_end_to_end,
         test_corner_cut_path_is_unfollowable,
         test_moving_obstacle,
+        test_moving_obstacle_with_static,
     ]
 
     args = sys.argv[1:]

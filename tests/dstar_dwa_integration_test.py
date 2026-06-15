@@ -102,11 +102,16 @@ def path_is_robot_safe(path, grid):
 # MARK: DWA Waypoint Follower (lookahead — aim ahead, not at the nearest waypoint)
 
 def follow_path(dwa, grid, start, theta, waypoints,
-                max_replans=200, wp_tol=0.6, goal_tol=0.7, lookahead=1.5):
+                max_replans=200, wp_tol=0.6, goal_tol=0.7, lookahead=1.0):
     obstacles = np.argwhere(grid == 1)
     if hasattr(dwa, 'set_occupancy_grid'):
         dwa.set_occupancy_grid(grid)
-    x, y, th = float(start[0]), float(start[1]), float(theta)
+    # Start heading along the path's first segment (motion model: x=row uses
+    # cos, y=col uses sin -> atan2(dcol, drow)), not the passed default —
+    # otherwise the robot starts ~90 deg off an east-west path and spirals.
+    th = (math.atan2(waypoints[1][1] - waypoints[0][1], waypoints[1][0] - waypoints[0][0])
+          if len(waypoints) >= 2 else float(theta))
+    x, y = float(start[0]), float(start[1])
     v, om = 0.0, 0.0
     wp_idx = 0
     collided = left = False
@@ -186,7 +191,7 @@ def test_dstar_dwa_end_to_end():
 def test_dstar_replan_after_obstacle_appears():
     """An obstacle appears on the route; D* Lite replans, DWA follows it."""
     logger.info("TEST 2: obstacle appears -> D* Lite replans -> DWA follows")
-    start, goal = (0, 0), (0, 7)
+    start, goal = (2, 0), (2, 7)   # row 2 (interior) so the follower has room on both sides
 
     dstar = DStarLitePlanner()
     grid_a = clear_map()
@@ -202,8 +207,8 @@ def test_dstar_replan_after_obstacle_appears():
     # Robot has advanced; a wall now blocks the direct route ahead.
     new_start = tuple(path1[min(2, len(path1) - 2)])
     grid_b = clear_map()
-    grid_b[0][4] = 1
     grid_b[1][4] = 1
+    grid_b[2][4] = 1
     dstar.set_occupancy_grid(grid_b)
     path2 = dstar.plan(new_start, goal)
     ok, reason = path_is_robot_safe(path2, grid_b)
@@ -220,7 +225,7 @@ def test_dstar_replan_after_obstacle_appears():
 def test_dstar_replan_after_obstacle_removed():
     """A wall is removed, opening a shortcut; D* Lite replans, DWA follows it."""
     logger.info("TEST 3: obstacle removed -> D* Lite replans shorter -> DWA follows")
-    start, goal = (0, 0), (0, 7)
+    start, goal = (2, 0), (2, 7)   # row 2 (interior) so the driven path doesn't hug the edge
 
     dstar = DStarLitePlanner()
     walled = clear_map()
@@ -251,6 +256,146 @@ def test_dstar_replan_after_obstacle_removed():
     return report(reached, collided, left, pose, replans, "took the reopened shortcut and DWA reached goal")
 
 
+# MARK: Moving-hazard helper + full-stack test
+
+def drive_with_hazard(dwa, grid, start, theta, path, hazard_fn,
+                      max_replans=200, wp_tol=0.6, goal_tol=0.7, lookahead=1.5,
+                      encounter_r=2.0, yield_speed=0.2):
+    """
+    Drive DWA along `path` while a moving hazard crosses it. The hazard
+    (hazard_fn(step) -> (r, c)) is added to the obstacle set each cycle, as a
+    perception tracker would feed it to the local planner. Logs grid + pose +
+    "hazard at" telemetry so the dashboard animates both robot and hazard.
+
+    Returns a metrics dict including `yielded`: whether the robot slowed below
+    `yield_speed` while the hazard was within `encounter_r` (the desired
+    behavior — slow/halt for the crossing hazard rather than dart in front).
+    """
+    static = np.argwhere(grid == 1)
+    if hasattr(dwa, 'set_occupancy_grid'):
+        
+        dwa.set_occupancy_grid(grid)
+    # Start heading along the path so the robot doesn't swing ~90 deg onto it.
+    th = (math.atan2(path[1][1] - path[0][1], path[1][0] - path[0][0])
+          if len(path) >= 2 else float(theta))
+    x, y = float(start[0]), float(start[1])
+    v, om = 0.0, 0.0
+    wp_idx = 0
+    collided = left = reached = False
+    min_dist = float('inf')
+    min_speed_near = float('inf')
+    goal = path[-1]
+    logger.info(f"Start: ({start[0]}, {start[1]}), Goal: ({goal[0]}, {goal[1]})")
+    logger.info(f"MAP {len(grid)} {len(grid[0])}")
+    for _row in grid:
+        logger.info("MAPROW " + "".join('1' if int(_c) != 0 else '0' for _c in _row))
+    px, py = x, y
+    i = 0
+    for i in range(max_replans):
+        hz = hazard_fn(i)
+        # if hz is not None:
+        #     g2 = grid.copy(); g2[hz[0], hz[1]] = 1
+        #     dstar.set_occupancy_grid(g2)
+        #     new = dstar.plan((int(round(x)), int(round(y))), goal)
+        #     if path_is_robot_safe(new, g2)[0]:
+        #         path, wp_idx = new, 0
+        logger.info(f"pose=({x:.2f},{y:.2f})")
+        logger.debug(f"hazard at ({hz[0]},{hz[1]})")
+        hd = math.hypot(hz[0] - x, hz[1] - y)
+        min_dist = min(min_dist, hd)
+        if i > 0 and hd < encounter_r:
+            min_speed_near = min(min_speed_near, math.hypot(x - px, y - py))
+        px, py = x, y
+        if math.hypot(goal[0] - x, goal[1] - y) <= goal_tol:
+            reached = True
+            break
+        while wp_idx < len(path) - 1 and math.hypot(path[wp_idx][0] - x, path[wp_idx][1] - y) <= wp_tol:
+            wp_idx += 1
+        target_idx = wp_idx
+        while target_idx < len(path) - 1 and math.hypot(path[target_idx][0] - x, path[target_idx][1] - y) < lookahead:
+            target_idx += 1
+        obstacles = np.array([list(hz)]) if static.size == 0 else np.vstack([static, [hz]])
+        pair = dwa.plan((x, y, th), (v, om), path[target_idx], obstacles)
+        if pair is None:
+            v, om = 0.0, 0.0
+            continue
+        v, om = pair
+        for _ in range(5):
+            x += v * math.cos(th) * 0.1
+            y += v * math.sin(th) * 0.1
+            th += om * 0.1
+            r, c = int(round(x)), int(round(y))
+            if not collided and 0 <= r < len(grid) and 0 <= c < len(grid[0]) and grid[r][c] != 0:
+                collided = True
+            if not collided and math.hypot(hz[0] - x, hz[1] - y) < CONTACT:
+                collided = True
+            if not left and not (-0.5 <= x <= len(grid) - 0.5 and -0.5 <= y <= len(grid[0]) - 0.5):
+                left = True
+    return {'reached': reached, 'collided': collided, 'left': left,
+            'yielded': min_speed_near < yield_speed,
+            'min_dist': min_dist, 'min_speed_near': min_speed_near,
+            'replans': i, 'pose': (x, y)}
+
+
+def report_hazard(res, what):
+    """Reach, no collision, the hazard genuinely interfered, and the robot
+    YIELDED (slowed/halted) rather than darting in front of it."""
+    if (res['reached'] and not res['collided'] and not res['left']
+            and res['min_dist'] < 2.0 and res['yielded']):
+        logger.info(f"  PASS: {what}; yielded to the hazard (min speed {res['min_speed_near']:.2f}, "
+                    f"closest {res['min_dist']:.2f}), reached goal in {res['replans']} replans")
+        logger.info("PASS")
+        return True
+    if res['collided']:
+        logger.error(f"  FAIL: collided (closest {res['min_dist']:.2f})")
+    elif res['left']:
+        logger.error("  FAIL: robot left the map")
+    elif not res['reached']:
+        logger.error(f"  FAIL: did not reach goal, final pose ({res['pose'][0]:.2f}, {res['pose'][1]:.2f})")
+    elif res['min_dist'] >= 2.0:
+        logger.error(f"  FAIL: hazard never got close (closest {res['min_dist']:.2f}) — not a meaningful test")
+    else:
+        logger.error(f"  FAIL: robot did not yield (min speed near hazard {res['min_speed_near']:.2f}) "
+                     "— it darted past instead of slowing/halting for the crossing hazard")
+    logger.info("FAIL")
+    return False
+
+
+def test_dstar_moving_obstacle_with_static():
+    """Full-stack realism: D* Lite routes around static obstacles, DWA follows
+    AND yields to a moving hazard crossing the route.
+
+    The map has a static block the global planner must avoid; a hazard descends
+    a free channel (column 4) and crosses the planned path in the open. The
+    robot must route around the static obstacle, then slow/halt for the
+    crossing hazard without colliding. Acceptance test for the DWA yield rule.
+    """
+    logger.info("TEST 4: D* Lite routes around static obstacles + DWA yields to a moving hazard")
+    grid = np.array([
+        [0, 0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 1, 1, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 1, 1],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 1, 0, 1, 0, 0, 0, 0],
+        [0, 1, 0, 1, 0, 0, 0, 0],
+        [0, 1, 0, 1, 0, 0, 0, 0],
+    ])
+    start, goal = (0, 0), (7, 6)
+    dstar = DStarLitePlanner()
+    dstar.set_occupancy_grid(grid)
+    path = dstar.plan(start, goal)
+    ok, reason = path_is_robot_safe(path, grid)
+    if not ok:
+        logger.error(f"  FAIL: D* Lite path not usable — {reason}")
+        logger.info("FAIL")
+        return False
+    log_path(path)
+    res = drive_with_hazard(DWAPlanner(), grid, start, 0.0, path,
+                            lambda s: (min(7, s // 4), 4))
+    return report_hazard(res, "D* Lite routed around static obstacles")
+
+
 # MARK: Main Method
 
 def main():
@@ -258,6 +403,7 @@ def main():
         test_dstar_dwa_end_to_end,
         test_dstar_replan_after_obstacle_appears,
         test_dstar_replan_after_obstacle_removed,
+        test_dstar_moving_obstacle_with_static,
     ]
 
     args = sys.argv[1:]

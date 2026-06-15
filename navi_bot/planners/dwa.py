@@ -11,6 +11,7 @@
 from navi_bot.mock_ros2 import Node, Twist, Pose2D, Point, Path, OccupancyGrid
 import navi_bot.mock_ros2 as rclpy
 from navi_bot.utils.geometry import distance, angle_between_points, normalize_angle
+from collections import deque
 import math
 import numpy as np
 import time
@@ -23,6 +24,9 @@ ROBOT_RADIUS = 0.25 # meters
 CELL_RADIUS = 0.5 # meters
 GRID_RESOLUTION = 0.05 # meters
 CLEARANCE_CAP = 1.5
+YIELD_RANGE = 2.5              # m — react to a perceived mover only within this forward range
+YIELD_STANDOFF = 1.05          # m — ramp the top speed down to a halt this far short of it
+YIELD_CONE = math.radians(80)  # half-angle of the forward arc that counts as "ahead"
 
 class DWAPlanner:
     """
@@ -45,9 +49,13 @@ class DWAPlanner:
         self.heading_weight = 1.0
         self.speed_cost_gain = 1.0
         self.obstacle_cost_gain = 1.0
+        self.goal_weight = 2.0     # reward trajectories that end CLOSER to the goal
+        self.turn_weight = 0.25 # 0.25
         
         self.grid_resolution = GRID_RESOLUTION
         self.occupancy_grid = None
+        
+        self.position_history = deque(maxlen=5)
         
     def set_occupancy_grid(self, grid):
         """Update the occupancy grid."""
@@ -83,6 +91,46 @@ class DWAPlanner:
     
     def norm(self, x, hi, lo):
         return (x - lo) / (hi - lo) if hi > lo else 0.0
+
+    def is_dynamic_obstacle(self, obs):
+        """True if `obs` is NOT in the known static map — a perceived mover.
+
+        The static occupancy grid is the global planner's responsibility (it
+        routes around it); the local yield rule is only for obstacles that
+        aren't on that map (a crossing hazard fed in by perception). With no
+        grid set, every obstacle is treated as unknown/dynamic.
+        """
+        if self.occupancy_grid is None:
+            return True
+        r, c = int(round(obs[0])), int(round(obs[1]))
+        if 0 <= r < len(self.occupancy_grid) and 0 <= c < len(self.occupancy_grid[0]):
+            return self.occupancy_grid[r][c] == 0
+        return True
+    
+    def track_movers(self, movers, dt):
+        """
+        Estimate each mover's velocity by differencing over the WHOLE window
+        (newest - oldest), not frame-to-frame, so the hazard's stop-then-jump
+        motion still reads as a steady velocity. Returns [(pos, vel), ...] with
+        pos/vel as length-2 arrays, in cells and cells/second.
+        """
+        movers = [np.asarray(m, dtype=float) for m in movers]
+        tracked = []
+        if self.position_history:
+            oldest = self.position_history[0]
+            span = len(self.position_history) * dt
+            for m in movers:
+                vel = np.zeros(2)
+                if len(oldest):
+                    prev = min(oldest, key=lambda p: np.hypot(*(m - p)))
+                    disp = m - prev
+                    if np.hypot(*disp) <= self.max_vel_x * span + 1.0:
+                        vel = disp / span
+                tracked.append((m, vel))
+        else:
+            tracked = [(m, np.zeros(2)) for m in movers]
+        self.position_history.append(movers)
+        return tracked
         
     def plan(self, current_pose, current_vel, goal, obstacles):
         """
@@ -118,8 +166,34 @@ class DWAPlanner:
         num_steps = int(time_horizon / step_time)
         
         v_min, v_max, omega_min, omega_max, = self.compute_dynamic_window(current_vel, control_period)
-        candidates = []
         
+        static_obstacle = [o for o in obstacles if not self.is_dynamic_obstacle(o)]
+        movers = self.track_movers([o for o in obstacles if self.is_dynamic_obstacle(o)], control_period)
+
+        # Yield to a perceived MOVER ahead (one not in the static map): ramp the
+        # window's top speed down to a halt as the mover closes inside YIELD_RANGE,
+        # stopping a standoff short of it. Capping v_max (rather than returning
+        # (0, 0)) lets the dynamic-window accel limit smooth the slowdown and keeps
+        # the robot from freezing, so it resumes the moment the mover leaves the
+        # forward arc. Static obstacles are filtered out — steering around those is
+        # the global path's job, and braking for them is what froze the robot.
+        contact = ROBOT_RADIUS + CELL_RADIUS * 1.25 
+        nearest_ahead = float('inf')
+        # for obs in obstacles:
+        #     if not self.is_dynamic_obstacle(obs):
+        for (mpos, mvel) in movers:
+            dx, dy = mpos[0] - current_pose[0], mpos[1] - current_pose[1]
+            if dx * mvel[0] + dy * mvel[1] > 0:
+                continue
+            d = math.hypot(dx, dy)
+            if d < contact or abs(normalize_angle(math.atan2(dy, dx) - current_pose[2])) <= YIELD_CONE:
+                nearest_ahead = min(nearest_ahead, d)
+        if nearest_ahead < YIELD_RANGE:
+            frac = max(0.0, (nearest_ahead - YIELD_STANDOFF) / (YIELD_RANGE - YIELD_STANDOFF))
+            v_max = max(v_min, min(v_max, frac * self.max_vel_x))
+
+        candidates = []
+
         for v in np.linspace(v_min, v_max, 20):
             for omega in np.linspace(omega_min, omega_max, 40):
                 x, y, theta = current_pose[0], current_pose[1], current_pose[2]
@@ -136,30 +210,37 @@ class DWAPlanner:
                     theta = new_theta
                     positional_info.append((x, y, theta))
                     
-                score = self.score_trajectory(vel, goal, obstacles, positional_info)
+                #score = self.score_trajectory(vel, goal, obstacles, positional_info)
+                score = self.score_trajectory(vel, goal, static_obstacle, movers, positional_info, step_time)
                 if score is None:
                     continue
-                candidates.append((v, omega, score[0], score[1], score[2]))  # v, omega, heading, clearance, speed
+                candidates.append((v, omega, score[0], score[1], score[2], score[3]))  # v, omega, heading, clearance, speed, goal_dist
         if not candidates:
             return (0.0, 0.0)
-        
+
         # Pull each term into its own column, then normalize across candidates.
+        om = [c[1] for c in candidates]
         h  = [c[2] for c in candidates]
         cl = [c[3] for c in candidates]
         sp = [c[4] for c in candidates]
+        gd = [c[5] for c in candidates]
+        omax, omin = max(om), min(om)
         hmax, hmin = max(h), min(h)
         clmax, clmin = max(cl), min(cl)
         spmax, spmin = max(sp), min(sp)
+        gdmax, gdmin = max(gd), min(gd)
 
-        # Score every surviving candidate and keep the single best. Heading is
-        # an error (lower = better -> reward 1 - norm); clearance and speed are
-        # rewards (higher = better -> norm directly).
+        # Score every surviving candidate and keep the single best. Heading error
+        # and goal distance are costs (lower = better -> reward 1 - norm);
+        # clearance and speed are rewards (higher = better -> norm directly).
         best_cmd = (0.0, 0.0)
         best_score = float('-inf')
-        for v_c, omega_c, heading_c, clearance_c, speed_c in candidates:
+        for v_c, omega_c, heading_c, clearance_c, speed_c, goaldist_c in candidates:
             s = (self.heading_weight    * (1 - self.norm(heading_c, hmax, hmin))
                + self.obstacle_cost_gain * self.norm(clearance_c, clmax, clmin)
-               + self.speed_cost_gain    * self.norm(speed_c, spmax, spmin))
+               + self.speed_cost_gain    * self.norm(speed_c, spmax, spmin)
+               + self.turn_weight        * (1 - self.norm(abs(omega_c), omax, omin))
+               + self.goal_weight       * (1 - self.norm(goaldist_c, gdmax, gdmin)))
             if s > best_score:
                 best_score = s
                 best_cmd = (v_c, omega_c)
@@ -198,29 +279,33 @@ class DWAPlanner:
         
         return(v_min, v_max, omega_min, omega_max)
     
-    def score_trajectory(self, vel, goal, obstacles, pos):
+    def score_trajectory(self, vel, goal, obstacles, movers, pos, step_time):
         """Score a velocity command"""
-        if vel is None:
-            return None
-        elif goal is None:
-            return None
-        elif pos is None:
+        if vel is None or goal is None or pos is None:
             return None
         
-        contact = ROBOT_RADIUS + CELL_RADIUS
-        
+        contact = ROBOT_RADIUS + CELL_RADIUS * 1.25
         min_clearance = float('inf')
-        for p in pos:
+        
+        for i, p in enumerate(pos):
             x, y, theta = p
-            
             if not self.is_pose_inbounds(x, y):
                 return None
+            t = min(i, 17.0) * step_time
             
             for obstacle in obstacles:
                 clear = heuristic_forward((x, y), obstacle)
                 if clear < contact:
                     return None
                 min_clearance = min(min_clearance, clear)
+            
+            for (mx, my), (vx, vy) in movers:
+                px, py = mx + vx * t, my + vy * t
+                clear = math.hypot(x - px, y - py)
+                if clear < contact:
+                    return None
+                min_clearance = min(min_clearance, clear)
+                
         min_clearance = min(min_clearance, CLEARANCE_CAP)
         braking_room = max(0.0, min_clearance - contact)
         if abs(vel[0]) > np.sqrt(2.0 * braking_room * self.max_accel_x):
@@ -228,8 +313,9 @@ class DWAPlanner:
         
         _, _, final_theta = pos[-1]
         heading = abs(normalize_angle(angle_between_points((pos[-1][0], pos[-1][1]), goal) - final_theta))
-        
-        return (heading, min_clearance, vel[0])#(-(self.heading_weight * heading) - self.obstacle_cost_gain * (1.0 / min_clearance)) + (self.speed_cost_gain * vel[0])
+        goal_dist = distance((pos[-1][0], pos[-1][1]), goal)
+
+        return (heading, min_clearance, vel[0], goal_dist)
 
 def heuristic_forward(pos, goal):
     """Euclidian distance heuristic."""
