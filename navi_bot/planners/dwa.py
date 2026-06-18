@@ -193,7 +193,8 @@ class DWAPlanner:
             v_max = max(v_min, min(v_max, frac * self.max_vel_x))
 
         candidates = []
-
+        cloud_ends = []
+        
         for v in np.linspace(v_min, v_max, 20):
             for omega in np.linspace(omega_min, omega_max, 40):
                 x, y, theta = current_pose[0], current_pose[1], current_pose[2]
@@ -214,6 +215,7 @@ class DWAPlanner:
                 score = self.score_trajectory(vel, goal, static_obstacle, movers, positional_info, step_time)
                 if score is None:
                     continue
+                cloud_ends.append((positional_info[-1][0], positional_info[-1][1]))
                 candidates.append((v, omega, score[0], score[1], score[2], score[3]))  # v, omega, heading, clearance, speed, goal_dist
         if not candidates:
             return (0.0, 0.0)
@@ -244,6 +246,11 @@ class DWAPlanner:
             if s > best_score:
                 best_score = s
                 best_cmd = (v_c, omega_c)
+                
+        if cloud_ends:
+            stride = max(1, len(cloud_ends) // 24)
+            logger.debug("CLOUD " + " ".join(f"{a:.2f},{b:.2f}" for a, b in cloud_ends[::stride]))
+            
         return best_cmd
     
     def compute_dynamic_window(self, current_vel, dt):

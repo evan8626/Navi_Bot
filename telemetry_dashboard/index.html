@@ -581,16 +581,43 @@ function inferHazardTrail(lines) {
   return trail.length?trail:null;
 }
 
+// Per-step DWA candidate "cloud" ("CLOUD x,y x,y ...") and the moving hazard's
+// predicted path ("HAZPRED x,y x,y ..."), both logged 1:1 with the pose trail.
+// Each parsed entry is the list of [x,y] points for that step.
+function inferPointCloud(lines, tag) {
+  const trail=[], re=new RegExp('^'+tag+'\\s+(.+)$');
+  for (const l of lines) {
+    const m=l.text.match(re);
+    if (m) trail.push(m[1].trim().split(/\s+/)
+      .map(p=>p.split(',').map(Number)).filter(q=>q.length===2&&q.every(Number.isFinite)));
+  }
+  return trail.length?trail:null;
+}
+const inferCloudTrail=(lines)=>inferPointCloud(lines,'CLOUD');
+const inferHazPred   =(lines)=>inferPointCloud(lines,'HAZPRED');
+
 // ═══════════════════════════════════════════════════════════
 //  TEST MAP CANVAS
 // ═══════════════════════════════════════════════════════════
 const tgCanvas = document.getElementById('test-grid-canvas');
 const tgCtx    = tgCanvas.getContext('2d');
 const tgOverlay= document.getElementById('no-path-overlay');
-let tgAnimTimer=null, tgPathStep=0;
+let tgAnimTimer=null, tgPathStep=0, tgAnim=null;
 // Current grid preview, captured by showCase so hover can scrub the robot
 // back and forth along the finished path: {mapKey,start,goal,trail,isPoseTrail}
-let tgPreview=null, tgScrubActive=false, tgHazardTrail=null;
+let tgPreview=null, tgScrubActive=false, tgHazardTrail=null, tgCloudTrail=null, tgHazPredTrail=null;
+
+// Stop any in-flight reveal — the legacy timer AND the anime.js instance — so a
+// new case or a hover-scrub takes over cleanly. (Uses a temp so the literal
+// "tgStopAnim()" doesn't appear here and self-rewrite.)
+function tgStopAnim(){ if(tgAnim){ tgAnim.pause(); tgAnim=null; } const t=tgAnimTimer; tgAnimTimer=null; clearTimeout(t); }
+
+// Interpolated [x,y] at a FRACTIONAL trail index, so the robot glides between poses.
+function trailPosAt(trail, step){
+  const i=Math.max(0,Math.min(Math.floor(step),trail.length-1));
+  const j=Math.min(i+1,trail.length-1), f=step-i;
+  return [trail[i][0]+(trail[j][0]-trail[i][0])*f, trail[i][1]+(trail[j][1]-trail[i][1])*f];
+}
 
 // Robot marker shared by the test grid and the demo map: red dot with a
 // white chevron pointing along the heading (screen-space radians; null = no arrow).
@@ -647,10 +674,27 @@ function drawTestGrid(mapKey, start, goal, path, step, poseTrail, hasData) {
   tgCtx.globalAlpha=1.0;
   if (!hasData) return;
 
-  // Moving hazard (dynamic obstacle) at the current step — drawn under the
-  // path so the robot's dodge reads against it.
+  const si = Math.max(0, Math.round(step));   // discrete index for per-step data (hazard, clouds)
+
+  // DWA candidate cloud — the trajectory endpoints the planner sampled this
+  // cycle, as soft-edged but DEFINED particles (no additive glow, so it reads as
+  // a contained cloud rather than a haze). Drawn first, under the path and robot.
+  if (tgCloudTrail) {
+    const pts=tgCloudTrail[Math.min(si,tgCloudTrail.length-1)];
+    if (pts && pts.length) {
+      const R=cell*0.3;
+      for (const [x,y] of pts){
+        const px=y*cell+cell/2, py=x*cell+cell/2;
+        const g=tgCtx.createRadialGradient(px,py,0,px,py,R);
+        g.addColorStop(0,'rgba(90,165,240,0.22)'); g.addColorStop(1,'rgba(90,165,240,0)');
+        tgCtx.fillStyle=g; tgCtx.beginPath(); tgCtx.arc(px,py,R,0,Math.PI*2); tgCtx.fill();
+      }
+    }
+  }
+
+  // Moving hazard (dynamic obstacle) at the current step.
   if (tgHazardTrail && step>=0) {
-    const h=tgHazardTrail[Math.min(step,tgHazardTrail.length-1)];
+    const h=tgHazardTrail[Math.min(si,tgHazardTrail.length-1)];
     if (h) {
       tgCtx.fillStyle='rgba(226,75,74,0.5)';
       tgCtx.fillRect(h[1]*cell,h[0]*cell,cell,cell);
@@ -659,55 +703,67 @@ function drawTestGrid(mapKey, start, goal, path, step, poseTrail, hasData) {
     }
   }
 
-  // Pose trail (float coords — waypoint nav / DWA rollout). Large jumps
+  // Hazard's predicted path — a translucent dashed forecast ahead of it.
+  if (tgHazPredTrail) {
+    const pts=tgHazPredTrail[Math.min(si,tgHazPredTrail.length-1)];
+    if (pts && pts.length) {
+      tgCtx.strokeStyle='rgba(226,75,74,0.4)'; tgCtx.lineWidth=Math.max(1,cell*.1);
+      tgCtx.setLineDash([cell*.25,cell*.2]); tgCtx.beginPath();
+      pts.forEach(([x,y],i)=>{ const px=y*cell+cell/2,py=x*cell+cell/2; i===0?tgCtx.moveTo(px,py):tgCtx.lineTo(px,py); });
+      tgCtx.stroke(); tgCtx.setLineDash([]);
+      tgCtx.fillStyle='rgba(226,75,74,0.28)';
+      for (const [x,y] of pts){ tgCtx.beginPath(); tgCtx.arc(y*cell+cell/2,x*cell+cell/2,Math.max(1.5,cell*.09),0,Math.PI*2); tgCtx.fill(); }
+    }
+  }
+
+  // Pose trail (float coords). Revealed up to the FRACTIONAL step; large jumps
   // between consecutive poses break the polyline instead of criss-crossing.
   if (poseTrail && poseTrail.length>1) {
-    const vis=poseTrail.slice(0,step+1);
+    const fi=Math.min(Math.floor(step),poseTrail.length-1);
     tgCtx.beginPath(); tgCtx.strokeStyle='#378add55';
     tgCtx.lineWidth=Math.max(1,cell*.15); tgCtx.lineJoin='round';
-    vis.forEach(([x,y],i)=>{
-      const px=y*cell+cell/2,py=x*cell+cell/2;
-      const jump=i>0&&(Math.abs(x-vis[i-1][0])+Math.abs(y-vis[i-1][1]))>6;
-      (i===0||jump)?tgCtx.moveTo(px,py):tgCtx.lineTo(px,py);
-    });
+    let started=false;
+    for (let i=0;i<=fi;i++){ const [x,y]=poseTrail[i], px=y*cell+cell/2, py=x*cell+cell/2;
+      const jump=i>0&&(Math.abs(x-poseTrail[i-1][0])+Math.abs(y-poseTrail[i-1][1]))>6;
+      (!started||jump)?tgCtx.moveTo(px,py):tgCtx.lineTo(px,py); started=true; }
+    if (fi<poseTrail.length-1){ const [tx,ty]=trailPosAt(poseTrail,step); tgCtx.lineTo(ty*cell+cell/2,tx*cell+cell/2); }
     tgCtx.stroke();
   }
 
-  // Waypoint path (grid-cell path)
+  // Waypoint path (grid-cell path), fractional reveal.
   if (path && path.length>1 && !poseTrail) {
-    const vis=path.slice(0,step+1);
-    if (vis.length>1) {
-      tgCtx.beginPath(); tgCtx.strokeStyle='#1d9e75';
-      tgCtx.lineWidth=Math.max(1.5,cell*.18); tgCtx.lineJoin='round';
-      vis.forEach(([x,y],i)=>{ const px=y*cell+cell/2,py=x*cell+cell/2; i===0?tgCtx.moveTo(px,py):tgCtx.lineTo(px,py); });
-      tgCtx.stroke();
-    }
+    const fi=Math.min(Math.floor(step),path.length-1);
+    tgCtx.beginPath(); tgCtx.strokeStyle='#1d9e75';
+    tgCtx.lineWidth=Math.max(1.5,cell*.18); tgCtx.lineJoin='round';
+    for (let i=0;i<=fi;i++){ const [x,y]=path[i], px=y*cell+cell/2, py=x*cell+cell/2; i===0?tgCtx.moveTo(px,py):tgCtx.lineTo(px,py); }
+    if (fi<path.length-1){ const [tx,ty]=trailPosAt(path,step); tgCtx.lineTo(ty*cell+cell/2,tx*cell+cell/2); }
+    tgCtx.stroke();
   }
 
   // Start
   if (start) { const[sr,sc]=start; tgCtx.fillStyle='#7f77dd'; tgCtx.beginPath(); tgCtx.arc(sc*cell+cell/2,sr*cell+cell/2,Math.max(3,cell*.28),0,Math.PI*2); tgCtx.fill(); }
   // Goal
   if (goal) { const[gr,gc]=goal; tgCtx.fillStyle='#ba7517'; tgCtx.beginPath(); tgCtx.arc(gc*cell+cell/2,gr*cell+cell/2,Math.max(4,cell*.32),0,Math.PI*2); tgCtx.fill(); tgCtx.strokeStyle='rgba(255,255,255,.2)'; tgCtx.lineWidth=1; tgCtx.stroke(); }
-  // Robot (tip of trail) with heading arrow
+  // Robot — interpolated tip so it glides between poses; heading from nearest step.
   const activeTrail=poseTrail||path;
-  if (activeTrail && step>=0) {
-    const idx=Math.min(step,activeTrail.length-1);
-    const tip=activeTrail[idx];
-    const px=tip[1]*cell+cell/2, py=tip[0]*cell+cell/2;
-    drawRobot(tgCtx,px,py,Math.max(4,cell*.32),trailHeading(activeTrail,idx));
+  if (activeTrail && activeTrail.length && step>=0) {
+    const [rx,ry]=trailPosAt(activeTrail,step);
+    drawRobot(tgCtx,ry*cell+cell/2,rx*cell+cell/2,Math.max(4,cell*.32),trailHeading(activeTrail,si));
   }
 }
 
 function animateTrail(mapKey, start, goal, trail, isPoseTrail) {
-  clearTimeout(tgAnimTimer); tgPathStep=0;
+  tgStopAnim();
   const total=trail.length-1;
-  const delay=Math.max(25,Math.min(100,3000/Math.max(1,total)));
-  const step=()=>{
-    if (isPoseTrail) drawTestGrid(mapKey,start,goal,null,tgPathStep,trail,true);
-    else             drawTestGrid(mapKey,start,goal,trail,tgPathStep,null,true);
-    if (tgPathStep<total){ tgPathStep++; tgAnimTimer=setTimeout(step,delay); }
-  };
-  step();
+  if (total<1) { drawTestGrid(mapKey,start,goal,isPoseTrail?null:trail,0,isPoseTrail?trail:null,true); return; }
+  // anime.js tweens a single fractional progress value with easing; each frame
+  // redraws the grid revealing the path up to that point and gliding the robot.
+  const prog={s:0};
+  const draw=()=> isPoseTrail ? drawTestGrid(mapKey,start,goal,null,prog.s,trail,true)
+                              : drawTestGrid(mapKey,start,goal,trail,prog.s,null,true);
+  if (typeof anime==='undefined') { drawTestGrid(mapKey,start,goal,isPoseTrail?null:trail,total,isPoseTrail?trail:null,true); return; }
+  tgAnim=anime({ targets:prog, s:total,
+    duration:Math.max(700,Math.min(4500,total*110)), easing:'easeInOutSine', update:draw });
 }
 
 // ── Hover to scrub the robot back and forth along the finished path ──
@@ -723,7 +779,7 @@ function tgScrubTo(clientX, clientY) {
   const row=(clientY-rect.top)/rect.height*map.rows;
   let best=0, bestD=Infinity;
   tgPreview.trail.forEach((pt,i)=>{ const d=(pt[0]-row)**2+(pt[1]-col)**2; if(d<bestD){bestD=d;best=i;} });
-  clearTimeout(tgAnimTimer); tgScrubActive=true;
+  tgStopAnim(); tgScrubActive=true;
   const {mapKey,start,goal,trail,isPoseTrail}=tgPreview;
   if (isPoseTrail) drawTestGrid(mapKey,start,goal,null,best,trail,true);
   else             drawTestGrid(mapKey,start,goal,trail,best,null,true);
@@ -731,7 +787,7 @@ function tgScrubTo(clientX, clientY) {
 }
 function tgScrubEnd() {
   if (!tgScrubActive || !tgPreview || !tgPreview.trail) return;
-  tgScrubActive=false; clearTimeout(tgAnimTimer);
+  tgScrubActive=false; tgStopAnim();
   const {mapKey,start,goal,trail,isPoseTrail}=tgPreview;
   const last=trail.length-1;
   if (isPoseTrail) drawTestGrid(mapKey,start,goal,null,last,trail,true);
@@ -883,7 +939,7 @@ function selectFile(file) {
     document.getElementById('output-meta').textContent='';
     renderCaseList(file);
     document.getElementById('tg-title').textContent='grid preview';
-    clearTimeout(tgAnimTimer);
+    tgStopAnim();
     const noPath=NO_PATH_SUITES.has(file);
     drawTestGrid('clear8',null,null,null,0,null,false); // blank, no data yet
     tgOverlay.style.display=noPath?'flex':'none';
@@ -955,6 +1011,7 @@ function liveGridUpdate(file) {
   const path=inferPath(caseLines);
   const poseTrail=inferPoseTrail(caseLines);
   tgHazardTrail=inferHazardTrail(caseLines);
+  tgCloudTrail=inferCloudTrail(caseLines); tgHazPredTrail=inferHazPred(caseLines);
   // For grid-logging suites the planned path (X:/Y:) streams in before the grid
   // AND before the robot moves — drawing it would flash the path on the map (a
   // guessed clear map first, then the real one) ahead of the pose animation.
@@ -966,7 +1023,7 @@ function liveGridUpdate(file) {
   if (!start) start=[Math.round(trail[0][0]),Math.round(trail[0][1])];
   // no goal fallback while live: the trail's end is the robot, not the goal
   const mapKey=resolveMapKey(caseLines,file);
-  clearTimeout(tgAnimTimer);
+  tgStopAnim();
   document.getElementById('tg-title').textContent='live · '+mapLabelOf(mapKey)+' map';
   drawTestGrid(mapKey,start,goal,poseTrail?null:path,trail.length-1,poseTrail,true);
 }
@@ -976,8 +1033,8 @@ function showCase(file, idx) {
   const entry=(suiteCases[file]||[])[idx];
   if (!entry) return;
   const caseLines=entry.lines||[];
-  clearTimeout(tgAnimTimer);
-  tgPreview=null; tgScrubActive=false; tgHazardTrail=null; tgCanvas.style.cursor='default';
+  tgStopAnim();
+  tgPreview=null; tgScrubActive=false; tgHazardTrail=null; tgCloudTrail=null; tgHazPredTrail=null; tgCanvas.style.cursor='default';
 
   // Suites that never have path data
   if (NO_PATH_SUITES.has(file)) {
@@ -1001,6 +1058,7 @@ function showCase(file, idx) {
   const path=inferPath(caseLines);
   const poseTrail=inferPoseTrail(caseLines);
   tgHazardTrail=inferHazardTrail(caseLines);  // moving obstacle, animated with the robot
+  tgCloudTrail=inferCloudTrail(caseLines); tgHazPredTrail=inferHazPred(caseLines);
   // No explicit Start:/Goal: in the log — fall back to the trail endpoints
   const trail=poseTrail||path;
   if (trail&&trail.length>1) {
@@ -1089,7 +1147,7 @@ function clearAllResults() {
   if (selectedFile) renderCaseList(selectedFile);
   else document.getElementById('test-case-list').innerHTML='';
   document.getElementById('tg-title').textContent='grid preview';
-  clearTimeout(tgAnimTimer);
+  tgStopAnim();
   tgOverlay.style.display='none';
   drawTestGrid('clear8',null,null,null,0,null,false);
 }
@@ -1111,7 +1169,7 @@ function startRun(file, onDone, testNum) {
   const rb=document.getElementById('run-btn-test');
   rb.classList.add('running'); rb.textContent='Stop'; rb.disabled=false;
   renderCaseList(file);
-  clearTimeout(tgAnimTimer);
+  tgStopAnim();
   tgOverlay.style.display='none';
   drawTestGrid('clear8',null,null,null,0,null,false);
   if (window.navi) window.navi.runTest(file,testsDir,testNum||null);
@@ -1198,6 +1256,7 @@ function appendLine(file,parsed) {
       }
     }
   }
+  if (/^(CLOUD|HAZPRED)\b/.test(parsed.text)) return;  // grid-cloud data, not terminal text (already in result.lines)
   if (file!==selectedFile) return;
   const pane=document.getElementById('output-pane');
   const es=document.getElementById('empty-state'); if(es) es.remove();

@@ -301,6 +301,11 @@ def drive_with_hazard(dwa, grid, start, theta, path, hazard_fn,
         #         path, wp_idx = new, 0
         logger.info(f"pose=({x:.2f},{y:.2f})")
         logger.debug(f"hazard at ({hz[0]},{hz[1]})")
+        if i >= 1:                                     # forecast the hazard a few steps ahead (dashboard cloud)
+            n = min(4, i)
+            hp = hazard_fn(i - n)
+            vr, vc = (hz[0] - hp[0]) / n, (hz[1] - hp[1]) / n
+            logger.debug("HAZPRED " + " ".join(f"{hz[0] + vr*k:.2f},{hz[1] + vc*k:.2f}" for k in range(1, 6)))
         hd = math.hypot(hz[0] - x, hz[1] - y)
         min_dist = min(min_dist, hd)
         if i > 0 and hd < encounter_r:
