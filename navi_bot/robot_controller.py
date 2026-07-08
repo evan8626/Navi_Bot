@@ -50,12 +50,15 @@ class RobotController(Node):
         # Obstacle detection state
         self.closest_obstacle_dist = float('inf')
         self.closest_obstacle_angle = 0.0
-        self.closest_threshold = 1.5 # meters - consider obstacles closer than this
+        self.obstacle_threshold = 1.5 # meters - consider obstacles closer than this
         self.valid_obstacles = [] # List of (distance, angle) tuples
 
         # Motion controllers
         self.motion_controller = MotionController()
         self.kinematics = DifferentialDriveKinematics(wheel_base=0.4, wheel_radius=0.1, max_wheel_speed=10.0)
+        
+        # Publishers
+        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
         # Subscribers
         self.lidar_sub = self.create_subscription(LaserScan, '/scan', self.lidar_callback, 10)

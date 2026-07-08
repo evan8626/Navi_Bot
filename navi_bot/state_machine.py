@@ -142,6 +142,8 @@ class StateMachine(Node):
             self.handle_error_state()
         elif self.current_state == RobotState.IDLE:
             self.handle_idle_state()
+        elif self.current_state == RobotState.READY:
+            self.handle_ready_state()
         elif self.current_state == RobotState.PICK_NAV:
             self.handle_navigating_to_pickup()
         elif self.current_state == RobotState.PICKING_UP:
@@ -185,6 +187,17 @@ class StateMachine(Node):
             self.transition_state(RobotState.PICK_NAV)
         elif self.current_mission.status == 'picked_up':
             self.transition_state(RobotState.DELIVERY_NAV)
+            
+    # MARK: READY
+    def handle_ready_state(self):
+        """Handle READY state logic"""
+        if self.current_mission is None:
+            self.get_logger().info("No mission assigned. Robot is ready.\n")
+            return
+        if self.current_mission.status == 'delivered':
+            self.transition_state(RobotState.PICK_NAV)
+        elif self.current_mission.status == 'picked_up':
+            self.transition_state(RobotState.DELIVERY_NAV)
 
     # MARK: NAV TO PICKUP
     def handle_navigating_to_pickup(self):
@@ -193,7 +206,8 @@ class StateMachine(Node):
         goal = Pose2D()
         goal.x = self.current_mission.pickup_location[0]
         goal.y = self.current_mission.pickup_location[1]
-        self.goal_pub.publish(goal)
+        if self.goal_pub is not None:
+            self.goal_pub.publish(goal)
         
         if self.is_at_goal:
             self.current_mission.status = 'picking_up'
@@ -214,7 +228,7 @@ class StateMachine(Node):
             self.current_mission.status = 'picked_up'
             self.is_at_goal = False
             self.transition_state(RobotState.PICKED_UP)
-    
+
     def _pickup_done(self):
         self.pickup_complete = True
     

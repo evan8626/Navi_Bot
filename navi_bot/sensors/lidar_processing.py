@@ -79,6 +79,7 @@ class LidarProcessor:
         """
         obstacles = self.__polar_to_cartesian(ranges, angle_min, angle_increment)
         
+        if not obstacles: return []
         db = DBSCAN(eps=CLUSTER_EPS, min_samples=CLUSTER_MIN_SAMPLES).fit(obstacles)
         labels = db.labels_
         unique_labels = set(labels)

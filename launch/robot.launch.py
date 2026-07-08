@@ -41,7 +41,7 @@ def generate_launch_description():
             package='navi_bot',
             executable='robot_controller',
             name='robot_controller',
-            parameter=[
+            parameters=[
                 robot_params,
                 control_params,
                 {'use_sim_time' : use_sim_time}

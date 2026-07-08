@@ -9,11 +9,11 @@
 
 # FOR USE WITH MOCK ROS2
 from navi_bot.mock_ros2 import Node, Twist, Pose2D, Point, Path, OccupancyGrid
-import navi_bot.mock_ros2 as rclpy
+#import navi_bot.mock_ros2 as rclpy
 from navi_bot.utils.geometry import distance, angle_between_points, normalize_angle
 import math
 import numpy as np
-import time
+#import time
 import logging
 import heapq
 

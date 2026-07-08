@@ -9,7 +9,7 @@ import time
 from collections import defaultdict, deque
 import numpy as np
 
-class PerforamnceProfiler:
+class PerformanceProfiler:
     """
     Tracks execution time and deadline compliance for real-time tasks
     """
@@ -135,7 +135,7 @@ class Timer:
         self.profiler.stop_timing(self.task_name, self.deadline)
 
 # Global profiler instance
-global_profiler = PerforamnceProfiler()
+global_profiler = PerformanceProfiler()
 
 def profile(task_name, deadline = None):
     """ 

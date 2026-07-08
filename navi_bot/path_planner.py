@@ -79,6 +79,7 @@ class PathPlannerNode(Node):
         
     def map_callback(self, msg):
         """Handle map updates."""
+        #msg = len(grid) / grid[row][col]
         self.global_planner.set_occupancy_grid(msg)
         self.DStar_local_planner.set_occupancy_grid(msg)
     
@@ -135,25 +136,25 @@ class PathPlannerNode(Node):
             logger.info("Already at goal, no path needed.")
             return
         
-        if self.dstar_initialized and self.dstar_start != self.current_goal:
-            changed_edges = self.DStar_local_planner.edge_changed()
-            for edge in changed_edges:
-                c_old = self.DStar_local_planner.cost(edge[0], edge[1], self.DStar_local_planner.previous_grid)
-                c_new = self.DStar_local_planner.cost(edge[0], edge[1], self.DStar_local_planner.occupancy_grid)
-                if c_old > c_new:
-                    if edge[0] != self.current_goal:
-                        self.DStar_local_planner.rhs_values[edge[0]] = min(self.DStar_local_planner.rhs_values.get(edge[0], float('inf')), c_new + self.DStar_local_planner.g_values.get(edge[0], float('inf')))
-                    self.DStar_local_planner.U.Update(edge[0], self.DStar_local_planner.calculate_key(edge[0], self.dstar_start))
-                elif self.DStar_local_planner.rhs_values.get(edge[0], float('inf')) == c_old + self.DStar_local_planner.g_values.get(edge[1], float('inf')):
-                    if edge[0] != self.current_goal:
-                        self.DStar_local_planner.rhs_values[edge[1]] = min(self.DStar_local_planner.rhs_values.get(edge[1], float('inf')), min([self.DStar_local_planner.cost(edge[1], s, self.DStar_local_planner.occupancy_grid) + self.DStar_local_planner.g_values.get(s, float('inf')) for s in self.DStar_local_planner.get_successors(edge[1])]))
-                    self.DStar_local_planner.U.Update(edge[1], self.DStar_local_planner.calculate_key(edge[1], self.dstar_start))
+        # if self.dstar_initialized and self.dstar_start != self.current_goal:
+        #     changed_edges = self.DStar_local_planner.edge_changed()
+        #     for edge in changed_edges:
+        #         c_old = self.DStar_local_planner.cost(edge[0], edge[1], self.DStar_local_planner.previous_grid)
+        #         c_new = self.DStar_local_planner.cost(edge[0], edge[1], self.DStar_local_planner.occupancy_grid)
+        #         if c_old > c_new:
+        #             if edge[0] != self.current_goal:
+        #                 self.DStar_local_planner.rhs_values[edge[0]] = min(self.DStar_local_planner.rhs_values.get(edge[0], float('inf')), c_new + self.DStar_local_planner.g_values.get(edge[0], float('inf'))) # float('inf')), c_new + self.DStar_local_planner.g_values.get(edge[0], float('inf')
+        #             self.DStar_local_planner.U.Update(edge[0], self.DStar_local_planner.calculate_key(edge[0], self.dstar_start))
+        #         elif self.DStar_local_planner.rhs_values.get(edge[0], float('inf')) == c_old + self.DStar_local_planner.g_values.get(edge[1], float('inf')):
+        #             if edge[0] != self.current_goal:
+        #                 self.DStar_local_planner.rhs_values[edge[1]] = min(self.DStar_local_planner.rhs_values.get(edge[1], float('inf')), min([self.DStar_local_planner.cost(edge[1], s, self.DStar_local_planner.occupancy_grid) + self.DStar_local_planner.g_values.get(s, float('inf')) for s in self.DStar_local_planner.get_successors(edge[1])]))
+        #             self.DStar_local_planner.U.Update(edge[1], self.DStar_local_planner.calculate_key(edge[1], self.dstar_start))
                 
-            self.DStar_local_planner.compute_shortest_path(self.dstar_start, self.current_goal, self.DStar_local_planner.occupancy_grid)
-            s_start = min(self.DStar_local_planner.get_successors(self.dstar_start), key=lambda s: self.DStar_local_planner.cost(self.dstar_start, s, self.DStar_local_planner.occupancy_grid) + self.DStar_local_planner.g_values.get(s, float('inf')))
-            self.dstar_last = self.dstar_start
-            self.dstar_start = s_start
-            self.DStar_local_planner.k_m += heuristic_backward(self.dstar_last, self.dstar_start)
+        #     self.DStar_local_planner.compute_shortest_path(self.dstar_start, self.current_goal, self.DStar_local_planner.occupancy_grid)
+        #     s_start = min(self.DStar_local_planner.get_successors(self.dstar_start), key=lambda s: self.DStar_local_planner.cost(self.dstar_start, s, self.DStar_local_planner.occupancy_grid) + self.DStar_local_planner.g_values.get(s, float('inf')))
+        #     self.dstar_last = self.dstar_start
+        #     self.dstar_start = s_start
+        #     self.DStar_local_planner.k_m += heuristic_backward(self.dstar_last, self.dstar_start)
             
      
         planning_time = time.perf_counter() - planning_start

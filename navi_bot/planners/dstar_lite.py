@@ -103,7 +103,7 @@ class DStarLitePlanner:
                 return False
             if (self.occupancy_grid[row][col] != 0):
                 # cell is occupied
-                logger.info(f"Cell at row {row}, col {col} is occupied.")
+                logger.debug(f"Cell at row {row}, col {col} is occupied.")
                 return False
             return True
         else:
@@ -199,7 +199,7 @@ class DStarLitePlanner:
             return None
         elif heuristic_backward(start, goal) == 0:
             logger.info("Already at goal. No path needed.")
-            return None
+            return [goal]
         logger.info(f"Planning path from {start} to {goal} using D* Lite.")
         path = []
         if not self.initialized or goal != self.goal:

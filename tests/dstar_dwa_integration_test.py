@@ -106,6 +106,7 @@ def follow_path(dwa, grid, start, theta, waypoints,
     obstacles = np.argwhere(grid == 1)
     if hasattr(dwa, 'set_occupancy_grid'):
         dwa.set_occupancy_grid(grid)
+    dwa.set_global_path(waypoints)  # global path for the anti-limit-cycle path term
     # Start heading along the path's first segment (motion model: x=row uses
     # cos, y=col uses sin -> atan2(dcol, drow)), not the passed default —
     # otherwise the robot starts ~90 deg off an east-west path and spirals.
@@ -275,6 +276,7 @@ def drive_with_hazard(dwa, grid, start, theta, path, hazard_fn,
     if hasattr(dwa, 'set_occupancy_grid'):
         
         dwa.set_occupancy_grid(grid)
+    dwa.set_global_path(path)  # global path for the anti-limit-cycle path term
     # Start heading along the path so the robot doesn't swing ~90 deg onto it.
     th = (math.atan2(path[1][1] - path[0][1], path[1][0] - path[0][0])
           if len(path) >= 2 else float(theta))
@@ -305,7 +307,7 @@ def drive_with_hazard(dwa, grid, start, theta, path, hazard_fn,
             n = min(4, i)
             hp = hazard_fn(i - n)
             vr, vc = (hz[0] - hp[0]) / n, (hz[1] - hp[1]) / n
-            logger.debug("HAZPRED " + " ".join(f"{hz[0] + vr*k:.2f},{hz[1] + vc*k:.2f}" for k in range(1, 6)))
+            logger.debug("HAZARD " + " ".join(f"{hz[0] + vr*k:.2f},{hz[1] + vc*k:.2f}" for k in range(1, 6)))
         hd = math.hypot(hz[0] - x, hz[1] - y)
         min_dist = min(min_dist, hd)
         if i > 0 and hd < encounter_r:

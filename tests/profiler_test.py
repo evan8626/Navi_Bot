@@ -18,7 +18,7 @@ import math
 import sys
 import time
 
-from navi_bot.utils.profiler import PerforamnceProfiler, Timer, profile, global_profiler
+from navi_bot.utils.profiler import PerformanceProfiler, Timer, profile, global_profiler
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
@@ -27,7 +27,7 @@ logging.basicConfig(level=logging.DEBUG)
 # MARK: Setup
 
 def setup_profiler(history_size=100):
-    return PerforamnceProfiler(history_size=history_size)
+    return PerformanceProfiler(history_size=history_size)
 
 
 # MARK: Timing

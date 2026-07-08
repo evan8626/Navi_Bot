@@ -10,6 +10,9 @@ it needs to execute.
 from navi_bot.utils.geometry import distance, angle_between_points, normalize_angle
 
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 
 MAX_LOOKAHEAD = 8.0 # meters
 MAX_LINEAR_VELOCITY = 1.0 # m/s
@@ -61,7 +64,7 @@ class PurePursuitController:
         current_position = (x, y)
         next_lookahead = self.find_next_lookahead(path, current_position)
         if next_lookahead is None:
-            print(f"Next lookahead point is {next_lookahead} either path is exhausted, or there is an issue with lookahead.")
+            logger.info(f"Next lookahead point is {next_lookahead} either path is exhausted, or there is an issue with lookahead.")
             return (0, 0)
         else:
             a = angle_between_points(current_position, next_lookahead)

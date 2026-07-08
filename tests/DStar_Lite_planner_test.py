@@ -147,11 +147,11 @@ def test_already_at_goal():
     
     try:
         path = d_start.plan(start, goal)
-        if path is None: 
+        if path == [goal]:
             logger.info("Test Already at Goal: Passed\n")
             return True
         else:
-            logger.error(f"Test Already at Goal, but got a path of {path} instead\n")
+            logger.error(f"Test Already at Goal, expected [{goal}] but got {path} instead\n")
             return False
     except Exception as e:
         logger.error(f"Test Already at Goal: Failed with error {e}\n")
