@@ -13,7 +13,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
-        (os.path.join('share', package_name, 'maps'), glob('maps/*.yaml')),
+        (os.path.join('share', package_name, 'maps'), glob('maps/*.yaml') + glob('maps/*.pgm')),
     ],
     install_requires=[
         'setuptools',
@@ -31,6 +31,7 @@ setup(
             'robot_controller = navi_bot.robot_controller:main',
             'path_planner = navi_bot.path_planner:main',
             'state_machine = navi_bot.state_machine:main',
+            'map_publisher = navi_bot.map_publisher:main',
         ],
     },
 )

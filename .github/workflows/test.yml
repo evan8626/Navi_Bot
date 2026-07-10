@@ -28,10 +28,13 @@ jobs:
           python tests/geometry_test.py
           python tests/kinematics_test.py
           python tests/lidar_mock_test.py
+          python tests/map_publisher_test.py
           python tests/motion_controller_test.py
           python tests/odometry_test.py
           python tests/path_planner_test.py
           python tests/profiler_test.py
           python tests/pure_pursuit_test.py
+          python tests/robot_controller_test.py
           python tests/state_machine_test.py
+          python tests/warehouse_map_test.py
           python tests/waypoint_nav_test.py

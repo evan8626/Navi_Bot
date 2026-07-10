@@ -94,8 +94,12 @@ class MockLogger:
     def info(self, msg: str):
         print(f"[INFO] {msg}")
 
-    def warn(self, msg: str):
+    def warning(self, msg: str):
         print(f"[WARN] {msg}")
+
+    # rclpy removed the deprecated .warn() alias in newer distros; keep it on
+    # the mock for older call sites, but new code should use .warning().
+    warn = warning
 
     def error(self, msg: str):
         print(f"[ERROR] {msg}")

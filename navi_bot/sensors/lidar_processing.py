@@ -9,8 +9,9 @@ Processes raw LIDAR scans for:
 """
 
 import numpy as np
-from navi_bot.mock_ros2 import LaserScan
+from navi_bot.ros_compat import LaserScan
 from sklearn.cluster import DBSCAN
+from sklearn.neighbors import NearestNeighbors
 
 ROBOT_RADIUS = 0.25 # meters
 CLUSTER_EPS = 0.3 # meters
@@ -136,14 +137,26 @@ class LidarProcessor:
         costmap.data = grid.ravel().tolist()
         
 
-    # def scan_match(self, current_scan, reference_scan):
-    #     """
-    #     Perform scan matching for localization
+    def scan_match(self, current_scan, reference_scan, initial_guess=(0, 0, 0), max_iterations=20, tolerance=1e-5):
+        """
+        Perform scan matching for localization
 
-    #     TODO: Implement ICP or other scan matching algo
-    #     Returns: (dx, dy, dtheta) transformation
-    #     """
-    #     return (0.0, 0.0, 0.0)
+        Returns: (dx, dy, dtheta) transformation
+        """
+        dx, dy, dtheta = initial_guess
+        prev_error = float('inf')
+        for iteration in range(max_iterations):
+            dx, dy, dtheta = current_scan[0], current_scan[1], current_scan[2]
+            nbrs = NearestNeighbors(n_neighbors=2).fit(reference_scan)
+            distances, indices = nbrs.kneighbors(current_scan)
+            matched_ref = reference_scan[indices[:, 1]]
+            dx, dy, dtheta = matched_ref - current_scan
+            
+            error = mean_squared_error(current_scan, matched_ref)
+            if abs(prev_error - error) < tolerance:
+                break
+            prev_error = error
+        return (dx, dy, dtheta), error
     
     def __polar_to_cartesian(self, ranges, angle_min, angle_increment):
         """

@@ -27,6 +27,8 @@ from navi_bot.utils.geometry import (
     circle_circle_collision,
     point_in_polygon,
     interpolate_path,
+    world_to_grid,
+    grid_to_world,
 )
 
 logger = logging.getLogger(__name__)
@@ -316,6 +318,47 @@ def test_interpolate_path_short_input():
     return passed
 
 
+# MARK: World <-> Grid
+
+def test_world_grid_conversions():
+    """world_to_grid/grid_to_world must follow the ROS grid convention (x along
+    columns), respect origin/resolution, and round-trip through cell centres."""
+    passed = True
+    logger.info("TEST 14: world_to_grid / grid_to_world conventions and round-trip")
+    # ROS convention: world x -> columns, world y -> rows.
+    if world_to_grid(3.0, 5.0, (0.0, 0.0), 1.0) != (5, 3):
+        logger.warning(f"  FAIL world (3,5) -> {world_to_grid(3.0, 5.0, (0.0, 0.0), 1.0)}, expected (row 5, col 3)")
+        passed = False
+    else:
+        logger.info("  OK   world (3,5) -> cell (row 5, col 3) at 1 m/cell")
+    # Origin offset and finer resolution: world (1.25, 2.35) with origin (1, 2)
+    # at 0.1 m/cell -> (row 3, col 2). (Points are cell-INTERIOR on purpose:
+    # cell-edge-exact coordinates are ambiguous under floating point.)
+    if world_to_grid(1.25, 2.35, (1.0, 2.0), 0.1) != (3, 2):
+        logger.warning(f"  FAIL offset case -> {world_to_grid(1.25, 2.35, (1.0, 2.0), 0.1)}, expected (3, 2)")
+        passed = False
+    else:
+        logger.info("  OK   origin offset + 0.1 m/cell handled")
+    # grid_to_world returns the CELL CENTRE.
+    if grid_to_world(5, 3, (0.0, 0.0), 1.0) != (3.5, 5.5):
+        logger.warning(f"  FAIL centre -> {grid_to_world(5, 3, (0.0, 0.0), 1.0)}, expected (3.5, 5.5)")
+        passed = False
+    else:
+        logger.info("  OK   grid (5,3) -> world cell centre (3.5, 5.5)")
+    # Round-trip: any cell's centre maps back to the same cell (incl. negatives).
+    for cell in [(0, 0), (7, 2), (19, 19), (-3, -1)]:
+        x, y = grid_to_world(cell[0], cell[1], (-2.0, 4.0), 0.05)
+        back = world_to_grid(x, y, (-2.0, 4.0), 0.05)
+        if back != cell:
+            logger.warning(f"  FAIL round-trip {cell} -> ({x},{y}) -> {back}")
+            passed = False
+            break
+    else:
+        logger.info("  OK   centre round-trip holds (incl. negative cells)")
+    logger.info("PASS" if passed else "FAIL")
+    return passed
+
+
 # MARK: Main Method
 
 def main():
@@ -333,6 +376,7 @@ def main():
         test_point_in_polygon,
         test_interpolate_path_spacing,
         test_interpolate_path_short_input,
+        test_world_grid_conversions,
     ]
 
     args = sys.argv[1:]

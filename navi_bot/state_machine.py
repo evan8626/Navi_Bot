@@ -6,17 +6,11 @@ Manages high-level robot behavior and mission execution.
 States: IDLE, NAVIGATION, PICKING_UP, DELIVERING, CHARGING, ERROR
 """
 
-# FOR USE WITH ACTUAL ROS2 INSTALL
-# import rclpy
-# from rclpy.node import Node
-# from geometry_msgs.msg import Twist, Pose2D
-# from sensor_msgs.msg import LaserSCan
-# from std_msgs.msg import Float32, String
-
-# FOR USE WITH MOCK ROS2
-from navi_bot.mock_ros2 import Node, Twist, Pose2D, LaserScan, Float32, String
-import navi_bot.mock_ros2 as rclpy
-from navi_bot.mock_ros2 import init, shutdown, spin
+# ROS 2 types via the compat shim: real rclpy when a ROS 2 env is active,
+# otherwise the in-process mock_ros2 (so the tests run without ROS 2 installed).
+from navi_bot.ros_compat import (
+    Node, Twist, Pose2D, LaserScan, Float32, String, rclpy, init, shutdown, spin,
+)
 
 from enum import Enum, auto
 

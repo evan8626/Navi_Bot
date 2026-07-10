@@ -40,6 +40,19 @@ def make_goal_msg(x, y):
     msg.y = y
     return msg
 
+# The node converts world coords to grid cells at its boundary using the ROS
+# convention (world x runs along COLUMNS, world y along rows; 1 m/cell and
+# origin (0,0) until a real map arrives). These helpers let tests speak in
+# grid-cell intent while publishing correctly-shaped world messages.
+
+def pose_at_cell(node, row, col, theta=0.0):
+    """Publish /current_pose so the robot sits in grid cell (row, col)."""
+    node.current_pose_callback(make_pose_msg(float(col), float(row), theta))
+
+def goal_at_cell(node, row, col):
+    """Publish /goal_pose so the goal lands in grid cell (row, col)."""
+    node.goal_callback(make_goal_msg(float(col), float(row)))
+
 def make_grid(array):
     """Wrap a numpy array as a mock OccupancyGrid-like object the planners accept."""
     return array
@@ -144,17 +157,19 @@ def test_init_dstar_not_initialized():
 
 def test_goal_callback_sets_goal():
     """
-    TEST 3: goal_callback must store the goal as a tuple (x, y).
+    TEST 3: goal_callback must convert the world goal to a grid (row, col) cell.
     """
     passed = False
-    logger.info("TEST 3: Callback — goal_callback must store goal as (x, y)")
+    logger.info("TEST 3: Callback — goal_callback stores the goal as a grid cell")
     node = setup_node()
+    # ROS grid convention: world x runs along COLUMNS, world y along rows —
+    # so world (3.0, 5.0) lands in cell (row 5, col 3) at 1 m/cell, origin 0.
     node.goal_callback(make_goal_msg(3.0, 5.0))
-    if node.current_goal == (3.0, 5.0):
-        logger.info(f"  OK   current_goal={node.current_goal}")
+    if node.current_goal == (5, 3):
+        logger.info(f"  OK   current_goal={node.current_goal} (row=y, col=x)")
         passed = True
     else:
-        logger.warning(f"  FAIL current_goal={node.current_goal}, expected (3.0, 5.0)")
+        logger.warning(f"  FAIL current_goal={node.current_goal}, expected (5, 3)")
     logger.info("PASS" if passed else "FAIL")
     return passed
 
@@ -329,9 +344,9 @@ def test_planning_path_ends_at_goal():
     logger.info("TEST 12: Planning — last waypoint must equal the goal")
     node = setup_node()
     node.map_callback(clear_map())
-    node.current_pose_callback(make_pose_msg(0.0, 0.0))
-    goal = (0, 7)
-    node.goal_callback(make_goal_msg(goal[0], goal[1]))
+    pose_at_cell(node, 0, 0)
+    goal = (0, 7)                      # grid (row, col)
+    goal_at_cell(node, *goal)
     fire(node)
     if node.current_path is not None and node.current_path[-1] == goal:
         logger.info(f"  OK   last waypoint={node.current_path[-1]}")
@@ -414,8 +429,8 @@ def test_planning_published_path_matches_waypoints():
     logger.info("TEST 16: Planning — published poses must match planned waypoints")
     node = setup_node()
     node.map_callback(clear_map())
-    node.current_pose_callback(make_pose_msg(0.0, 0.0))
-    node.goal_callback(make_goal_msg(0.0, 7.0))
+    pose_at_cell(node, 0, 0)
+    goal_at_cell(node, 0, 7)
     fire(node)
     if node.current_path is None or node.path_pub.last_msg is None:
         logger.warning("  FAIL no path or published message")
@@ -427,13 +442,15 @@ def test_planning_published_path_matches_waypoints():
         logger.warning(f"  FAIL pose count {len(poses)} != path length {len(path)}")
         passed = False
     else:
+        # Published poses are WORLD cell-centres of the grid waypoints:
+        # x = col + 0.5, y = row + 0.5 (1 m/cell, origin (0,0)).
         for i, (pose, waypoint) in enumerate(zip(poses, path)):
-            if pose.x != waypoint[0] or pose.y != waypoint[1]:
-                logger.warning(f"  FAIL pose[{i}]=({pose.x},{pose.y}) != waypoint={waypoint}")
+            if pose.x != waypoint[1] + 0.5 or pose.y != waypoint[0] + 0.5:
+                logger.warning(f"  FAIL pose[{i}]=({pose.x},{pose.y}) != cell-centre of {waypoint}")
                 passed = False
                 break
         else:
-            logger.info(f"  OK   all {len(poses)} poses match waypoints")
+            logger.info(f"  OK   all {len(poses)} poses are world cell-centres of their waypoints")
     logger.info("PASS" if passed else "FAIL")
     return passed
 
@@ -446,8 +463,8 @@ def test_planning_finds_path_obstacle_map():
     logger.info("TEST 17: Planning — must find a path on an obstacle map")
     node = setup_node()
     node.map_callback(obstacle_map())
-    node.current_pose_callback(make_pose_msg(0.0, 0.0))
-    node.goal_callback(make_goal_msg(0.0, 7.0))
+    pose_at_cell(node, 0, 0)
+    goal_at_cell(node, 0, 7)
     fire(node)
     if node.current_path is not None and len(node.current_path) > 0:
         logger.info(f"  OK   path found with {len(node.current_path)} waypoints")
@@ -487,8 +504,8 @@ def test_planning_path_contains_no_obstacles():
     node = setup_node()
     grid = obstacle_map()
     node.map_callback(grid)
-    node.current_pose_callback(make_pose_msg(0.0, 0.0))
-    node.goal_callback(make_goal_msg(0.0, 7.0))
+    pose_at_cell(node, 0, 0)
+    goal_at_cell(node, 0, 7)
     fire(node)
     if node.current_path is None:
         logger.warning("  FAIL no path returned")

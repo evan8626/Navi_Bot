@@ -90,12 +90,25 @@ def make_mission(mission_id, pickup, delivery):
 
 
 def publish_pose(planner, x, y, theta):
-    """Publish current pose to /current_pose so PathPlannerNode stays in sync."""
+    """Publish current pose to /current_pose so PathPlannerNode stays in sync.
+
+    Frame boundary: this simulation's pose x runs along grid ROWS (the
+    project's historic convention), while the node's world frame follows ROS
+    (world x along COLUMNS). Swap when crossing into message space."""
     msg = Pose2D()
-    msg.x = float(x)
-    msg.y = float(y)
+    msg.x = float(y)      # world x  <- sim col
+    msg.y = float(x)      # world y  <- sim row
     msg.theta = float(theta)
     planner.current_pose_callback(msg)
+
+
+def publish_goal(planner, cell):
+    """Publish a (row, col) grid-cell goal in the node's world frame
+    (same ROS-convention swap as publish_pose)."""
+    msg = Pose2D()
+    msg.x = float(cell[1])    # world x <- col
+    msg.y = float(cell[0])    # world y <- row
+    planner.goal_callback(msg)
 
 
 def sim_ticks(velocity, dt, wheel_radius, ticks_per_rev):
@@ -212,10 +225,7 @@ def run_mission(sm, planner, pursuit, odom, grid, mission, log_prefix=""):
     odom.reset(start[0], start[1], 0.0)
     publish_pose(planner, start[0], start[1], 0.0)
 
-    goal_msg = Pose2D()
-    goal_msg.x = float(mission.pickup_location[0])
-    goal_msg.y = float(mission.pickup_location[1])
-    planner.goal_callback(goal_msg)
+    publish_goal(planner, mission.pickup_location)
     planner.planning_loop()
 
     pickup_goal = mission.pickup_location
@@ -248,10 +258,7 @@ def run_mission(sm, planner, pursuit, odom, grid, mission, log_prefix=""):
 
     # Set delivery goal
     delivery_goal = mission.delivery_location
-    goal_msg2 = Pose2D()
-    goal_msg2.x = float(delivery_goal[0])
-    goal_msg2.y = float(delivery_goal[1])
-    planner.goal_callback(goal_msg2)
+    publish_goal(planner, delivery_goal)
     planner.planning_loop()
 
     # --- Navigate to delivery ---
@@ -474,10 +481,7 @@ def test_low_battery_charges_before_mission():
     planner.map_callback(grid)
     odom.reset(0.0, 0.0, 0.0)
     publish_pose(planner, 0.0, 0.0, 0.0)
-    goal_msg = Pose2D()
-    goal_msg.x = float(mission.pickup_location[0])
-    goal_msg.y = float(mission.pickup_location[1])
-    planner.goal_callback(goal_msg)
+    publish_goal(planner, mission.pickup_location)
     planner.planning_loop()
 
     reached, steps, pose = navigate_to_waypoint(

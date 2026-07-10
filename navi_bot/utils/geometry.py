@@ -153,6 +153,38 @@ def point_in_polygon(point, polygon):
 
     return inside
 
+def world_to_grid(x, y, origin, resolution):
+    """
+    World metres -> occupancy-grid cell (row, col).
+
+    ROS grid convention: world x runs along COLUMNS, world y along rows;
+    `origin` is the world position of cell (0, 0)'s corner. Uses floor so
+    every point inside a cell maps to that cell (including negatives).
+
+    Args:
+        x, y: point in world metres
+        origin: (x, y) of the map origin in world metres
+        resolution: metres per cell
+
+    Returns:
+        (row, col) integer cell indices
+    """
+    col = int(np.floor((x - origin[0]) / resolution))
+    row = int(np.floor((y - origin[1]) / resolution))
+    return row, col
+
+def grid_to_world(row, col, origin, resolution):
+    """
+    Occupancy-grid cell (row, col) -> world metres at the CELL CENTRE
+    (the inverse of world_to_grid up to the half-cell quantization).
+
+    Returns:
+        (x, y) in world metres
+    """
+    x = origin[0] + (col + 0.5) * resolution
+    y = origin[1] + (row + 0.5) * resolution
+    return x, y
+
 def interpolate_path(waypoints, resolution=0.1):
     """
     Interpolate waypoints to create smooth path.

@@ -6,17 +6,15 @@ Implements A* global planning, D* for local, and also DWA for local as a learnin
 Must meet real-time constraints for safety-critical navigation.
 """
 
-# FOR USE WITH ACTUAL ROS2 INSTALL
-# import rclpy
-# from rclpy.node import Node
-# from geometry_msgs.msg import Twist, Pose2D
-# from sensor_msgs.msg import LaserSCan
-# from std_msgs.msg import Float32, String
-
-# FOR USE WITH MOCK ROS2
-from navi_bot.mock_ros2 import Node, Twist, Pose2D, Point, Path, OccupancyGrid
-import navi_bot.mock_ros2 as rclpy
-from navi_bot.utils.geometry import distance, angle_between_points, normalize_angle
+# ROS 2 types via the compat shim: real rclpy when a ROS 2 env is active,
+# otherwise the in-process mock_ros2 (so the tests run without ROS 2 installed).
+from navi_bot.ros_compat import (
+    Node, Twist, Pose2D, Point, Path, OccupancyGrid, rclpy, latched_map_qos,
+    make_path_msg,
+)
+from navi_bot.utils.geometry import (
+    distance, angle_between_points, normalize_angle, world_to_grid, grid_to_world,
+)
 from navi_bot.planners.astar import AStarPlanner, heuristic_forward
 from navi_bot.planners.dstar_lite import DStarLitePlanner, heuristic_backward
 from navi_bot.planners.dwa import DWAPlanner
@@ -47,6 +45,11 @@ class PathPlannerNode(Node):
         self.current_goal = None
         self.current_pose = None
         self.replanning_needed = False
+
+        # Map geometry for the world<->grid boundary. Defaults make one cell
+        # equal one world unit at the origin until the first real map arrives.
+        self.map_resolution = 1.0
+        self.map_origin = (0.0, 0.0)
         
         # Timing
         self.planning_time_budget = 0.050 # 50ms 
@@ -54,7 +57,7 @@ class PathPlannerNode(Node):
         
         # Subscribers
         self.goal_sub = self.create_subscription(Pose2D, '/goal_pose', self.goal_callback, 10)
-        self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, 10)
+        self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_callback, latched_map_qos())
         self.current_pose_sub = self.create_subscription(Pose2D, '/current_pose', self.current_pose_callback, 10)
         
         # Planning timer (10Hz for global replan checks)
@@ -72,21 +75,27 @@ class PathPlannerNode(Node):
         
     def goal_callback(self, msg):
         """Handle new goal"""
-        self.current_goal = (int(msg.x), int(msg.y))
+        self.current_goal = world_to_grid(msg.x, msg.y, self.map_origin, self.map_resolution)
         self.replanning_needed = True
         self.dstar_initialized = False
         self.get_logger().info(f"New goal received: ({msg.x:.2f}, {msg.y:.2f})")
         
     def map_callback(self, msg):
-        """Handle map updates."""
-        #msg = len(grid) / grid[row][col]
-        self.global_planner.set_occupancy_grid(msg)
-        self.DStar_local_planner.set_occupancy_grid(msg)
+        """Convert map message to 2D array planners consume"""
+        if hasattr(msg, 'info'):
+            raw = np.array(msg.data, dtype=np.int8).reshape(msg.info.height, msg.info.width)
+            grid = ((raw >= 50) | (raw == -1)).astype(int)
+            self.map_resolution = msg.info.resolution
+            self.map_origin = (msg.info.origin.position.x, msg.info.origin.position.y)
+        else:
+            grid = np.asarray(msg)
+        self.global_planner.set_occupancy_grid(grid)
+        self.DStar_local_planner.set_occupancy_grid(grid)
     
     def current_pose_callback(self, msg):
         """Handle current pose updates."""
-        self.current_pose = (int(msg.x), int(msg.y), msg.theta)
-        
+        self.current_pose = (float(msg.x), float(msg.y), float(msg.theta))
+
     def planning_loop(self):
         """
         Main planning loop.
@@ -99,9 +108,10 @@ class PathPlannerNode(Node):
         planning_start = time.perf_counter()
         
         if (self.current_pose is None):
-            self.get_logger().warn("Current pose unknown, cannot plan")
+            self.get_logger().warning("Current pose unknown, cannot plan")
             return
-        start = (int(self.current_pose[0]), int(self.current_pose[1]))
+        start = world_to_grid(self.current_pose[0], self.current_pose[1],
+                              self.map_origin, self.map_resolution)
         
         path = self.global_planner.plan(start, self.current_goal)
         
@@ -109,16 +119,13 @@ class PathPlannerNode(Node):
             self.current_path = path
             self.replanning_needed = False
             self.get_logger().info(f"Path planned with {len(path)} waypoints")
-            path_msg = Path()
-            for waypoint in path:
-                p = Point()
-                p.x = waypoint[0]
-                p.y = waypoint[1]
-                path_msg.poses.append(p)
-                
-            self.path_pub.publish(path_msg)
+            # World cell-centres, packed per-backend (real nav_msgs/Path needs
+            # PoseStamped poses; the mock keeps bare Points).
+            world_path = [grid_to_world(wp[0], wp[1], self.map_origin, self.map_resolution)
+                          for wp in path]
+            self.path_pub.publish(make_path_msg(world_path))
         else:
-            self.get_logger().warn("No path found to goal")
+            self.get_logger().warning("No path found to goal")
             
         # D Star Lite local replanning
         if not self.dstar_initialized and self.current_goal is not None:
@@ -135,32 +142,11 @@ class PathPlannerNode(Node):
         if self.dstar_initialized and self.dstar_start == self.current_goal:
             logger.info("Already at goal, no path needed.")
             return
-        
-        # if self.dstar_initialized and self.dstar_start != self.current_goal:
-        #     changed_edges = self.DStar_local_planner.edge_changed()
-        #     for edge in changed_edges:
-        #         c_old = self.DStar_local_planner.cost(edge[0], edge[1], self.DStar_local_planner.previous_grid)
-        #         c_new = self.DStar_local_planner.cost(edge[0], edge[1], self.DStar_local_planner.occupancy_grid)
-        #         if c_old > c_new:
-        #             if edge[0] != self.current_goal:
-        #                 self.DStar_local_planner.rhs_values[edge[0]] = min(self.DStar_local_planner.rhs_values.get(edge[0], float('inf')), c_new + self.DStar_local_planner.g_values.get(edge[0], float('inf'))) # float('inf')), c_new + self.DStar_local_planner.g_values.get(edge[0], float('inf')
-        #             self.DStar_local_planner.U.Update(edge[0], self.DStar_local_planner.calculate_key(edge[0], self.dstar_start))
-        #         elif self.DStar_local_planner.rhs_values.get(edge[0], float('inf')) == c_old + self.DStar_local_planner.g_values.get(edge[1], float('inf')):
-        #             if edge[0] != self.current_goal:
-        #                 self.DStar_local_planner.rhs_values[edge[1]] = min(self.DStar_local_planner.rhs_values.get(edge[1], float('inf')), min([self.DStar_local_planner.cost(edge[1], s, self.DStar_local_planner.occupancy_grid) + self.DStar_local_planner.g_values.get(s, float('inf')) for s in self.DStar_local_planner.get_successors(edge[1])]))
-        #             self.DStar_local_planner.U.Update(edge[1], self.DStar_local_planner.calculate_key(edge[1], self.dstar_start))
-                
-        #     self.DStar_local_planner.compute_shortest_path(self.dstar_start, self.current_goal, self.DStar_local_planner.occupancy_grid)
-        #     s_start = min(self.DStar_local_planner.get_successors(self.dstar_start), key=lambda s: self.DStar_local_planner.cost(self.dstar_start, s, self.DStar_local_planner.occupancy_grid) + self.DStar_local_planner.g_values.get(s, float('inf')))
-        #     self.dstar_last = self.dstar_start
-        #     self.dstar_start = s_start
-        #     self.DStar_local_planner.k_m += heuristic_backward(self.dstar_last, self.dstar_start)
             
-     
         planning_time = time.perf_counter() - planning_start
         if planning_time > self.planning_time_budget:
             self.planning_deadline_misses += 1
-            self.get_logger().warn(f"Planning deadline miss! Took {planning_time*1000:.2f}ms")
+            self.get_logger().warning(f"Planning deadline miss! Took {planning_time*1000:.2f}ms")
    
 def main(args=None):
     rclpy.init(args=args)
