@@ -490,7 +490,7 @@ const NO_PATH_SUITES = new Set([
   'kinematics_test.py','state_machine_test.py','pure_pursuit_test.py',
   'geometry_test.py','profiler_test.py','websocket_test.py',
   'odometry_test.py','imu_test.py','robot_controller_test.py',
-  'map_publisher_test.py',
+  'map_publisher_test.py','scan_matching_test.py',
 ]);
 
 // Suites whose tests log their REAL grid ("MAP"/"MAPROW"). For these we hold the
@@ -842,6 +842,7 @@ const TEST_FILES=[
   {file:'pure_pursuit_test.py',       label:'Pure pursuit',    sub:'control/pure_pursuit.py', status:'ready'},
   {file:'state_machine_test.py',      label:'State machine',   sub:'state_machine.py',        status:'ready'},
   {file:'lidar_mock_test.py',         label:'LIDAR',           sub:'sensors/lidar_processing.py', status:'ready'},
+  {file:'scan_matching_test.py',      label:'Scan matching',   sub:'sensors/lidar_processing.py (ICP)', status:'ready'},
   {file:'waypoint_nav_test.py',       label:'Waypoint nav',    sub:'integration (20×20)',     status:'ready'},
   {file:'astar_dwa_integration_test.py', label:'A* + DWA nav', sub:'integration (global+local)', status:'ready'},
   {file:'dstar_dwa_integration_test.py', label:'D* + DWA nav', sub:'integration (global+local)', status:'ready'},

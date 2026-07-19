@@ -12,10 +12,13 @@ import numpy as np
 from navi_bot.ros_compat import LaserScan
 from sklearn.cluster import DBSCAN
 from sklearn.neighbors import NearestNeighbors
+from sklearn.metrics import mean_squared_error
 
 ROBOT_RADIUS = 0.25 # meters
 CLUSTER_EPS = 0.3 # meters
 CLUSTER_MIN_SAMPLES = 10
+TRIM_RATIO: float = 0.1
+MAX_CORR_DIST: float = 0.5
 
 class LidarProcessor:
     """
@@ -143,19 +146,29 @@ class LidarProcessor:
 
         Returns: (dx, dy, dtheta) transformation
         """
+        
+        # ref_scan = np.asarray(reference_scan, dtype=np.float64)
+        # cur = np.asarray(current_scan, dtype=np.float64)
+        # nbrs = NearestNeighbors(n_neighbors=1).fit(reference_scan)
+        # for iteration in range(max_iterations):
+        #     distances, indices = nbrs.kneighbors(current_scan)
+        #     matched_ref = ref_scan[indices.flatten()]
+        #     assert matched_ref.shape == cur.shape
+        #     dx, dy, dtheta = matched_ref[iteration][0] - cur[iteration][0], matched_ref[iteration][1] - cur[iteration][1], matched_ref[iteration][2] - cur[iteration][2]
+            
+        #     error = mean_squared_error(current_scan, matched_ref)
+        #     if abs(prev_error - error) < tolerance:
+        #         break
+        #     prev_error = error
         dx, dy, dtheta = initial_guess
         prev_error = float('inf')
-        for iteration in range(max_iterations):
-            dx, dy, dtheta = current_scan[0], current_scan[1], current_scan[2]
-            nbrs = NearestNeighbors(n_neighbors=2).fit(reference_scan)
-            distances, indices = nbrs.kneighbors(current_scan)
-            matched_ref = reference_scan[indices[:, 1]]
-            dx, dy, dtheta = matched_ref - current_scan
-            
-            error = mean_squared_error(current_scan, matched_ref)
-            if abs(prev_error - error) < tolerance:
-                break
-            prev_error = error
+        ref = np.array([reference_scan], copy=True).astype(np.float64)
+        cur = np.array([current_scan], copy=True).astype(np.float64)
+        
+        # Initializing with initial pose estimation
+        pose_est = np.array([np.cos(dtheta), -np.sin(dtheta)], [np.sin(dtheta), np.cos(dtheta)])
+        
+        
         return (dx, dy, dtheta), error
     
     def __polar_to_cartesian(self, ranges, angle_min, angle_increment):

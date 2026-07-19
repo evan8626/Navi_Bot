@@ -23,12 +23,15 @@ def generate_launch_description():
 
     use_rviz = LaunchConfiguration('use_rviz')
 
-    # Bring up the core robot nodes with the sim clock.
+    # Bring up the core robot nodes. use_sim_time MUST stay false until a
+    # simulator actually publishes /clock: with sim time on and no clock
+    # source, ROS time never advances and every rclpy timer (planning loop,
+    # control loop) silently never fires. Flip to 'true' when Gazebo lands.
     robot_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_dir, 'launch', 'robot.launch.py')
         ),
-        launch_arguments={'use_sim_time': 'true'}.items(),
+        launch_arguments={'use_sim_time': 'false'}.items(),
     )
 
     # Only pass `-d <config>` when the RViz config actually exists, so a missing
