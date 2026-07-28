@@ -147,27 +147,34 @@ class LidarProcessor:
         Returns: (dx, dy, dtheta) transformation
         """
         
-        # ref_scan = np.asarray(reference_scan, dtype=np.float64)
-        # cur = np.asarray(current_scan, dtype=np.float64)
-        # nbrs = NearestNeighbors(n_neighbors=1).fit(reference_scan)
-        # for iteration in range(max_iterations):
-        #     distances, indices = nbrs.kneighbors(current_scan)
-        #     matched_ref = ref_scan[indices.flatten()]
-        #     assert matched_ref.shape == cur.shape
-        #     dx, dy, dtheta = matched_ref[iteration][0] - cur[iteration][0], matched_ref[iteration][1] - cur[iteration][1], matched_ref[iteration][2] - cur[iteration][2]
-            
-        #     error = mean_squared_error(current_scan, matched_ref)
-        #     if abs(prev_error - error) < tolerance:
-        #         break
-        #     prev_error = error
         dx, dy, dtheta = initial_guess
         prev_error = float('inf')
-        ref = np.array([reference_scan], copy=True).astype(np.float64)
-        cur = np.array([current_scan], copy=True).astype(np.float64)
+        ref = np.array(reference_scan, copy=True).astype(np.float64)
+        cur = np.array(current_scan, copy=True).astype(np.float64)
+        nbrs = NearestNeighbors(n_neighbors=1).fit(ref)
         
         # Initializing with initial pose estimation
-        pose_est = np.array([np.cos(dtheta), -np.sin(dtheta)], [np.sin(dtheta), np.cos(dtheta)])
-        
+        # pose_est = np.array([np.cos(dtheta), -np.sin(dtheta)], [np.sin(dtheta), np.cos(dtheta)])
+        tx, ty, t_theta = dx, dy, dtheta
+        for iteration in range(max_iterations):
+            distances, indices = nbrs.kneighbors(cur)
+            matched_ref = ref[indices.flatten()]
+            assert matched_ref.shape == cur.shape
+            
+            # Compute transformation
+            tx = np.mean(matched_ref[:, 0] - cur[:, 0])
+            ty = np.mean(matched_ref[:, 1] - cur[:, 1])
+            t_theta = np.mean(np.arctan2(matched_ref[:, 1], matched_ref[:, 0]) - np.arctan2(cur[:, 1], cur[:, 0]))
+            
+            # Update current scan with estimated transformation
+            cos_theta = np.cos(t_theta)
+            sin_theta = np.sin(t_theta)
+            cur = np.dot(cur, np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]])) + np.array([tx, ty])
+            
+            error = mean_squared_error(cur, matched_ref)
+            if abs(prev_error - error) < tolerance:
+                break
+            prev_error = error
         
         return (dx, dy, dtheta), error
     
