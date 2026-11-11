@@ -153,10 +153,8 @@ class LidarProcessor:
         cur = np.array(current_scan, copy=True).astype(np.float64)
         nbrs = NearestNeighbors(n_neighbors=1).fit(ref)
         
-        # Initializing with initial pose estimation
-        # pose_est = np.array([np.cos(dtheta), -np.sin(dtheta)], [np.sin(dtheta), np.cos(dtheta)])
         tx, ty, t_theta = dx, dy, dtheta
-        for iteration in range(max_iterations):
+        for iteration in range(1, max_iterations + 1):
             distances, indices = nbrs.kneighbors(cur)
             matched_ref = ref[indices.flatten()]
             assert matched_ref.shape == cur.shape
@@ -175,6 +173,7 @@ class LidarProcessor:
             if abs(prev_error - error) < tolerance:
                 break
             prev_error = error
+        dx, dy, dtheta = tx, ty, t_theta
         
         return (dx, dy, dtheta), error
     
