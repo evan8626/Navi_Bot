@@ -1,0 +1,812 @@
+# Planning algorithms (A*, D* Lite, DWA)
+#
+# Curated code-review findings. One [[finding]] per defect.
+# `anchor` is a literal piece of the offending line; the report re-locates it on
+# every build, so line numbers never go stale. See code_review/README.md for the
+# field reference and how findings are marked fixed.
+
+[[finding]]
+id = "DS-002"
+title = "Map changes are missed when the caller updates its grid in place"
+severity = "high"
+category = "bug"
+file = "navi_bot/planners/dstar_lite.py"
+anchor = "self.previous_grid = self.occupancy_grid"
+symbol = "DStarLitePlanner.set_occupancy_grid"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+set_occupancy_grid() keeps a reference to the previous grid, not a copy. If the caller edits its
+array and passes the same object again, previous_grid and occupancy_grid are one object,
+edge_changed() finds no differences, and no vertex is updated.
+'''
+why = '''
+The planner keeps its old cost field and returns None (or a path through stale costs) although a
+fresh planner on the same grid finds a route. Updating a costmap in place is the normal way to
+maintain one.
+'''
+hint = '''
+Change detection must compare against something the caller cannot modify.
+'''
+
+[[finding]]
+id = "DS-003"
+title = "Two map updates between plans lose the first one"
+severity = "high"
+category = "bug"
+file = "navi_bot/planners/dstar_lite.py"
+anchor = "def set_occupancy_grid(self, grid):"
+symbol = "DStarLitePlanner.set_occupancy_grid"
+source = "lead"
+confidence = "reproduced"
+what = '''
+Only the last two grids are ever compared. If set_occupancy_grid() is called twice before the
+next plan(), the changes introduced by the first call are never diffed. Conversely previous_grid
+is never brought up to date after a plan, so the same diff is re-applied (and the whole grid
+re-scanned) on every later plan().
+'''
+why = '''
+In the node, /map callbacks and the planning timer are independent, so two map messages between
+plans is ordinary. The first one's obstacles are then invisible to the planner for good.
+'''
+hint = '''
+Track which cells have changed since the planner last processed them, rather than diffing two
+snapshots at plan time.
+'''
+
+[[finding]]
+id = "DS-006"
+title = "After a map change D* Lite reports 'no path' although a detour exists"
+severity = "high"
+category = "bug"
+file = "navi_bot/planners/dstar_lite.py"
+anchor = "def heuristic_backward(pos, start):"
+symbol = "heuristic_backward"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+Every move costs 1.0, diagonals included (cost()), so the true distance between cells is
+max(|dr|, |dc|). The heuristic is Manhattan, |dr| + |dc|, which is up to twice that. D* Lite's
+keys and its termination test assume the heuristic never over-estimates. After an obstacle is
+added, the affected vertices' keys are inflated above the start's key, compute_shortest_path()
+stops early with a stale g(start), and path extraction walks into a loop and returns None.
+'''
+why = '''
+Incremental replanning - the reason to use D* Lite - fails on the simplest case there is: an
+open grid with one new obstacle on the path. Roughly a quarter of random single-obstacle replans
+fail. The 13/13 passing D* tests use hand-built scenarios that happen to avoid it.
+'''
+hint = '''
+The heuristic and the edge-cost model must describe the same geometry. Work out what the
+cheapest possible cost between two cells is under cost(), and compare it with what
+heuristic_backward returns for a diagonal neighbour.
+'''
+
+[[finding]]
+id = "DW-001"
+title = "One DWA plan costs 50 ms to several seconds in pure Python"
+severity = "high"
+category = "performance"
+file = "navi_bot/planners/dwa.py"
+anchor = "for omega in np.linspace(omega_min, omega_max, 40):"
+symbol = "DWAPlanner.plan"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+plan() rolls out 20 x 40 = 800 velocity pairs for 20 steps each and, for every pose, loops over
+every obstacle calling geometry.distance() (np.sqrt on Python scalars). The work is 800 x 21 x N
+distance calls in the interpreter.
+'''
+why = '''
+This is what breaks the control loop (RC-001) and why the three DWA integration suites take
+30-55 s each.
+'''
+hint = '''
+The rollouts are identical arithmetic on 800 candidates - exactly the shape of problem numpy
+arrays exist for. Profile first to see which lines dominate.
+'''
+
+[[finding]]
+id = "DW-002"
+title = "DWA hard-codes a 0.5 s control period that no caller is told about"
+severity = "high"
+category = "bug"
+file = "navi_bot/planners/dwa.py"
+anchor = "control_period = 0.5"
+symbol = "DWAPlanner.plan"
+source = "lead"
+confidence = "reproduced"
+also_reported = 4
+what = '''
+plan() takes no time step. Inside it, control_period = 0.5 sizes the dynamic window (max_accel x
+0.5) and is passed to track_movers() as the time between observations. The tests happen to step
+the simulation 0.5 s per call; robot_controller calls every 20 ms.
+'''
+why = '''
+At any other call rate the acceleration limits are wrong (RC-003) and mover velocities are
+mis-estimated by the ratio of the two periods, so predicted hazard positions lag the real
+hazard. Repeated identical scans between LIDAR updates push the estimate to zero.
+'''
+hint = '''
+The time since the last call is an input to this algorithm, not a constant.
+'''
+
+[[finding]]
+id = "DW-003"
+title = "Once anything is inside the contact radius, DWA can never move again"
+severity = "high"
+category = "logic"
+file = "navi_bot/planners/dwa.py"
+anchor = "for i, p in enumerate(pos):"
+symbol = "DWAPlanner.score_trajectory"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+score_trajectory() rejects a trajectory if ANY pose on it is within CONTACT of an obstacle -
+including pose 0, the robot's current position. If an obstacle is already within CONTACT (0.875,
+wider than physical contact at 0.75), every candidate is rejected, plan() returns (0, 0), and
+that includes reversing or turning away.
+'''
+why = '''
+There is no escape manoeuvre: a person stepping close, or sensor noise, freezes the robot
+permanently. On the real map, with un-inflated A* paths next to walls (PP-005), this is the
+normal state.
+'''
+hint = '''
+A trajectory that increases clearance is safer than standing still - the admissibility test
+should be able to tell the difference.
+'''
+
+[[finding]]
+id = "DW-101"
+title = "CONTACT = 0.875 m (CELL_RADIUS is half a sim cell, not metres) stops the robot along real paths"
+severity = "high"
+category = "logic"
+file = "navi_bot/planners/dwa.py"
+anchor = "CELL_RADIUS = 0.5 # meters"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 22
+what = '''
+CELL_RADIUS is half of a 1-unit sim cell, but it is labelled metres and used in metric frames.
+CONTACT = 0.25 + 0.5*1.25 = 0.875 m rejects any rollout that comes within 0.875 m of a LIDAR
+point, while A* paths (no inflation) run 0.05 m from walls.
+'''
+why = '''
+On the warehouse map DWA returns (0,0) at most poses along the planned path: the robot cannot
+follow its own global plan.
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+code_review/evidence/reviewer-scripts/src_planners/dwa_probe.py -> "CONTACT = 0.875"; along the
+warehouse A* path with wall points within 1.5 m: "wp 20: nearest wall 0.55 m ... cmd=(0.0,
+0.0)", "wp 110: nearest wall 0.05 m ... cmd=(0.0, 0.0)", "(0,0) returned at 5/9 path poses".
+'''
+hint = '''
+Express the obstacle size in metres (e.g. half the map resolution) and inflate the global map so
+the two layers agree.
+'''
+
+[[finding]]
+id = "AS-002"
+title = "A* will plan a path out of an occupied start cell"
+severity = "medium"
+category = "bug"
+file = "navi_bot/planners/astar.py"
+anchor = "elif self.is_coord_valid(start[0], start[1]) is False:"
+symbol = "AStarPlanner.plan"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+is_coord_valid() checks bounds only. Neighbours are rejected when occupied, but the start cell
+itself is never tested.
+'''
+why = '''
+If localisation places the robot inside an inflated or occupied cell, A* reports a normal path
+instead of flagging that the start is invalid. D* Lite's method of the same name does reject
+occupied cells, so the two planners disagree on the same input.
+'''
+hint = '''
+Decide what an occupied start means (error? snap to nearest free cell?) and make both planners
+agree.
+'''
+
+[[finding]]
+id = "AS-003"
+title = "Coordinates passed as lists fail silently"
+severity = "medium"
+category = "robustness"
+file = "navi_bot/planners/astar.py"
+anchor = "if visited_coord == goal:"
+symbol = "AStarPlanner.plan"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+The goal test compares tuples built inside the loop with the caller's goal object. A list goal
+never compares equal to a tuple, so the search runs to exhaustion and returns None; a list start
+raises TypeError (unhashable) part-way through.
+'''
+why = '''
+The planner reports 'no path' for a perfectly reachable goal, with no hint that the argument
+type was the problem.
+'''
+hint = '''
+Normalise start and goal to tuples of ints on entry.
+'''
+
+[[finding]]
+id = "AS-004"
+title = "An occupied goal costs a full flood-fill before A* says no"
+severity = "medium"
+category = "performance"
+file = "navi_bot/planners/astar.py"
+anchor = "if self.occupancy_grid[new_i][new_j] != 0:"
+symbol = "AStarPlanner.plan"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+Occupied cells are skipped as neighbours, so an occupied goal is simply never reached and A*
+expands every reachable cell before returning None.
+'''
+why = '''
+On the 200x200 map that is about a third of a second per attempt, and the node retries ten times
+a second (PP-007).
+'''
+hint = '''
+The goal cell's occupancy is known before the search starts.
+'''
+
+[[finding]]
+id = "DS-001"
+title = "D* Lite can return a longer path than the optimum (same root cause as DS-006)"
+severity = "medium"
+category = "bug"
+file = "navi_bot/planners/dstar_lite.py"
+anchor = "return abs(pos[0] - start[0]) + abs(pos[1] - start[1])"
+symbol = "heuristic_backward"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+With an over-estimating heuristic the first plan can also terminate before the optimal route is
+found.
+'''
+why = '''
+Rare (about 1 in 300 random 9x9 grids) but real: the planner is not optimal under its own cost
+model, and its paths disagree with A*, which charges sqrt(2) for diagonals.
+'''
+hint = '''
+See DS-006. Separately, decide whether a diagonal should cost 1 or sqrt(2) - A* and D* Lite
+currently answer differently.
+'''
+
+[[finding]]
+id = "DS-004"
+title = "A map of a different size crashes plan() with IndexError"
+severity = "medium"
+category = "robustness"
+file = "navi_bot/planners/dstar_lite.py"
+anchor = "if self.previous_grid is not None and self.occupancy_grid[i][j] != self.previous_grid[i][j]:"
+symbol = "DStarLitePlanner.edge_changed"
+source = "lead"
+confidence = "reproduced"
+what = '''
+edge_changed() loops over the new grid's dimensions while indexing the old grid. The stored
+g/rhs values are also meaningless for a different map.
+'''
+why = '''
+Loading another map, or a SLAM map that grows, kills the planner.
+'''
+hint = '''
+A change of shape is a new problem, not an incremental update.
+'''
+
+[[finding]]
+id = "DS-005"
+title = "Every priority-queue removal rebuilds and re-heapifies the whole queue"
+severity = "medium"
+category = "performance"
+file = "navi_bot/planners/dstar_lite.py"
+anchor = "self.elements = [(p, i) for p, i in self.elements if i != item]"
+symbol = "U.Remove"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+U.Remove() filters the entire list and calls heapify; Update() calls Remove() first, and
+update_vertex() calls Remove() for every neighbour of every expanded vertex.
+'''
+why = '''
+Each update costs time proportional to the queue length, so replans that touch many cells are
+quadratic. A reviewer measured ~9 s for a replan on a 200x200 grid.
+'''
+hint = '''
+Look up 'lazy deletion' for binary heaps: leave stale entries in the heap and skip them when
+popped.
+'''
+
+[[finding]]
+id = "DS-103"
+title = "Three copy-pasted is_coord_valid methods with different semantics under the same name and docstring"
+severity = "medium"
+category = "duplication"
+file = "navi_bot/planners/dstar_lite.py"
+anchor = "def is_coord_valid(self, row, col):"
+symbol = "DStarLitePlanner.is_coord_valid"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 89
+what = '''
+astar.py l.36, dstar_lite.py l.89 and dwa.py l.68 each define is_coord_valid with the docstring
+"Checks for existant row/col...". The A* and DWA versions check bounds only; the D* version also
+rejects occupied cells. As a result A* accepts an occupied start and D* rejects it, and D*
+cost() repeats the occupancy check (l.125-129).
+'''
+why = '''
+Same name, different contract: behaviour diverges silently between planners.
+'''
+evidence = '''
+Read the three definitions; astar_probe.py "occupied start (1,1) -> [(1, 1), (0, 0)]" vs
+dstar_probe.py "start occupied -> None".
+'''
+hint = '''
+One shared helper (in_bounds / is_free) in utils, used explicitly.
+'''
+
+[[finding]]
+id = "DS-105"
+title = "Diagonal moves cost 1.0, so D* paths are geometrically longer than A*'s and disagree with the intended model"
+severity = "medium"
+category = "logic"
+file = "navi_bot/planners/dstar_lite.py"
+anchor = "return 1.0"
+symbol = "DStarLitePlanner.cost"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 130
+what = '''
+cost() returns 1.0 for every move, diagonals included, so D* minimises move count rather than
+distance. The project's own test (DStar_Lite_planner_test.py test_path_optimality docstring)
+states diagonals must cost sqrt(2).
+'''
+why = '''
+D* and A* return different-length paths on the same grid; D* paths can be ~14% longer in
+Euclidean terms.
+'''
+evidence = '''
+Inline fuzz vs A* over 2000 random grids -> "D* Euclidean length > A* optimum in 4/1808";
+smallest: grid [[1,0,0,0,0,0,0,0],[1,0,1,0,0,0,0,0],[0,0,0,0,0,0,1,0],[0,1,0,0,0,0,0,0]],
+(1,1)->(0,6): D* length 6.828 vs A* 6.0.
+'''
+hint = '''
+Return sqrt(2) for diagonal steps (and pair it with an octile heuristic).
+'''
+
+[[finding]]
+id = "DW-103"
+title = "\"progress\" is the closest segment index, not distance along the path"
+severity = "medium"
+category = "logic"
+file = "navi_bot/planners/dwa.py"
+anchor = "return (best_d, best_i)"
+symbol = "DWAPlanner.path_cost"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 153
+what = '''
+progress_weight rewards a larger segment index. On a 2-point path the index is always 0 (no
+progress signal); on uneven segments it jumps by whole segments; on a hairpin the closest
+segment can be a later one, rewarding a jump across the gap.
+'''
+why = '''
+The anti-limit-cycle term gives no signal on long segments and can reward cutting across a path.
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+code_review/evidence/reviewer-scripts/src_planners/dwa_probe.py -> "2-pt path, points (0,1) and
+(0,9): (0.0, 0) (0.0, 0)"; "path (0,0)-(0,1)-(0,10): (0,1.2)-> 1, (0,9)-> 1"; "hairpin path:
+point (0.4, 1) -> 0, point (0.6,1) -> 2".
+'''
+hint = '''
+Return arc length to the projection (cumulative segment length + t * segment length), searched
+near the last index.
+'''
+
+[[finding]]
+id = "AS-001"
+title = "plan() can answer before checking that it has a map"
+severity = "low"
+category = "logic"
+file = "navi_bot/planners/astar.py"
+anchor = "logger.warning(\"No occupancy grid available.\")"
+symbol = "AStarPlanner.plan"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+The 'no occupancy grid' check sits after input validation and after the already-at-goal
+shortcut. is_coord_valid() returns True for any non-negative cell when the grid is None.
+'''
+why = '''
+With no map, plan(s, s) returns [s] as if it were a valid path, and the validation messages are
+misleading.
+'''
+hint = '''
+Check the precondition that everything else depends on first.
+'''
+
+[[finding]]
+id = "AS-101"
+title = "Planners import the mock ROS module (and many unused names) even under real ROS"
+severity = "low"
+category = "dead-code"
+file = "navi_bot/planners/astar.py"
+anchor = "from navi_bot.mock_ros2 import Node, Twist, Pose2D, Point, Path, OccupancyGrid"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 11
+what = '''
+astar.py l.11-18 and dstar_lite.py l.11-18 import Node/Twist/Pose2D/... from navi_bot.mock_ros2
+(dstar also `import navi_bot.mock_ros2 as rclpy`), plus unused
+distance/angle_between_points/normalize_angle/numpy/time; none are used. astar.py l.98 `g_value
+= 0.0` is dead, `dir` shadows a builtin (astar l.120, dstar l.135), commented-out code at dstar
+l.140-141/211. path_planner.py similarly imports heapq, math, heuristic_forward,
+heuristic_backward unused.
+'''
+why = '''
+Pure algorithm modules depend on the test mock and bypass ros_compat; noise hides real
+dependencies.
+'''
+evidence = '''
+Read astar.py l.11-18, dstar_lite.py l.11-18, path_planner.py l.18-25; grep shows no use of
+these names.
+'''
+hint = '''
+Drop the ROS/mock imports from planner modules and unused names; remove dead locals/comments.
+'''
+
+[[finding]]
+id = "AS-102"
+title = "grid_resolution is a dead parameter; config/control_params.yaml is never loaded"
+severity = "low"
+category = "config"
+file = "navi_bot/planners/astar.py"
+anchor = "def __init__(self, grid_resolution=0.05):"
+symbol = "AStarPlanner.__init__"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 28
+what = '''
+AStarPlanner and DStarLitePlanner store grid_resolution but never read it. No node loads
+control_params.yaml (no yaml/declare_parameter use outside map_publisher/state_machine), so
+planner.obstacle_inflation_radius, planning_timeout, dwa.* weights (clearance_weight 2.0,
+velocity_weight 0.5) differ from the hard-coded values in DWAPlanner (obstacle_cost_gain 1.0,
+speed_cost_gain 1.0) and have no effect.
+'''
+why = '''
+Config file suggests tunables that do nothing; easy to "tune" without effect.
+'''
+evidence = '''
+grep -rn "yaml\|declare_parameter\|inflat\|grid_resolution" navi_bot -> only
+map_publisher/state_machine params and the two unused grid_resolution attrs.
+'''
+hint = '''
+Either load the yaml (ROS params) into the planners or delete the dead config/params.
+'''
+
+[[finding]]
+id = "AS-103"
+title = "Docstring says (x, y) world coordinates; plan() takes and returns (row, col) grid cells"
+severity = "low"
+category = "docs"
+file = "navi_bot/planners/astar.py"
+anchor = "start (tuple): (x, y) in world coordinates"
+symbol = "AStarPlanner.plan"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 61
+what = '''
+Args/Returns describe world coordinates, but plan() indexes occupancy_grid[row][col] directly
+with start/goal and returns cell tuples; path_planner converts with world_to_grid before
+calling.
+'''
+why = '''
+Misleads callers into passing metres (which then index wrong cells or crash on floats).
+'''
+evidence = '''
+Read l.56-66 vs l.130/135 (grid indexing) and path_planner.py l.113-116 (world_to_grid before
+plan).
+'''
+hint = '''
+Document as (row, col) integer cells.
+'''
+
+[[finding]]
+id = "DS-101"
+title = "Opaque naming: class `U`, CamelCase methods, \"local planning\" docstring"
+severity = "low"
+category = "naming"
+file = "navi_bot/planners/dstar_lite.py"
+anchor = "class U:"
+symbol = "U"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 22
+what = '''
+Queue class is named after the paper symbol `U` with CamelCase methods
+(Update/Remove/Insert/Pop/Top/TopKey), against PEP 8. The class docstring calls D* Lite a
+"local" planner, while mpc.py says D* is for global planning. path_planner stores `dstar_last =
+current_goal` (a goal under a "last" name).
+'''
+why = '''
+Hard to read and inconsistent documentation of planner roles.
+'''
+evidence = '''
+Read dstar_lite.py l.22-49, mpc.py l.2, path_planner.py l.135.
+'''
+hint = '''
+Rename (e.g. KeyedPriorityQueue, snake_case methods) and settle one description of D*'s role.
+'''
+
+[[finding]]
+id = "DS-102"
+title = "goal/s_last created outside __init__; update_vertex before init raises; empty-queue Top() is not guarded"
+severity = "low"
+category = "robustness"
+file = "navi_bot/planners/dstar_lite.py"
+anchor = "self.goal = goal"
+symbol = "DStarLitePlanner.d_star_initialize"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 70
+what = '''
+self.goal and self.s_last only exist after d_star_initialize, so update_vertex() before that
+raises AttributeError. compute_shortest_path keeps looping while g(start)!=rhs(start) even if U
+is empty; Top() then returns None and calculate_key(None, ...) raises TypeError. Normally start
+is in U whenever it is inconsistent, so this is latent.
+'''
+why = '''
+Fragile call-order coupling (path_planner already calls the internals directly).
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+code_review/evidence/reviewer-scripts/src_planners/dstar_probe.py -> "update_vertex before init
+-> AttributeError(... no attribute 'goal')"; crafted empty U with g!=rhs: "compute_shortest_path
+... -> TypeError('NoneType' object is not subscriptable)".
+'''
+hint = '''
+Initialise goal/s_last to None in __init__ and stop the loop (return failure) when U is empty.
+'''
+
+[[finding]]
+id = "DS-104"
+title = "INFO/WARNING logging in hot paths"
+severity = "low"
+category = "style"
+file = "navi_bot/planners/dstar_lite.py"
+anchor = "logger.info(f\"Cost from {a} to {b} is infinite due to occupancy.\")"
+symbol = "DStarLitePlanner.cost"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 128
+what = '''
+D* cost() logs at INFO from the inner loop; A* is_coord_valid logs at INFO; DWA plan() logs
+warnings on every rejected call (50 Hz); path_planner logs "No path found" every 0.1 s while a
+goal is unreachable; DWA builds a debug string eagerly (dwa.py l.274).
+'''
+why = '''
+Log floods at runtime and slows the hot loops.
+'''
+evidence = '''
+Read dstar_lite.py l.128, astar.py l.39/42, dwa.py l.166-181, path_planner.py l.128; DStar test
+log is 1146 lines for 13 tests (the full-suite run logs: summary.txt).
+'''
+hint = '''
+Use DEBUG in inner loops; rate-limit repeated warnings.
+'''
+
+[[finding]]
+id = "DS-106"
+title = "plan() runs compute_shortest_path before applying edge changes; full-grid diff every call; unused params"
+severity = "low"
+category = "design"
+file = "navi_bot/planners/dstar_lite.py"
+anchor = "self.compute_shortest_path(start, goal, self.occupancy_grid)"
+symbol = "DStarLitePlanner.plan"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 212
+what = '''
+The paper order is: move start, update k_m, update changed edges, then ComputeShortestPath. Here
+it is computed once on stale state (l.212), then edges are updated and it is computed again
+(l.219). edge_changed (l.173) scans every cell in Python on every plan() (~20 ms on 200x200).
+compute_shortest_path ignores its `goal` and `grid` parameters and always returns None.
+'''
+why = '''
+Wasted work per replan, and a signature that suggests the passed grid is used when it is not.
+'''
+evidence = '''
+dstar_prof.py -> "edge_changed alone 20 ms 128 edges"; read l.150-171, 212-219.
+'''
+hint = '''
+Apply edge updates first, then compute once; track changed cells instead of scanning; drop the
+unused params.
+'''
+
+[[finding]]
+id = "DW-102"
+title = "Docstrings and comments describe 3 scoring terms; the code uses 7"
+severity = "low"
+category = "docs"
+file = "navi_bot/planners/dwa.py"
+anchor = "Samples velocity commands within dynamic window and scores them based on:"
+symbol = "DWAPlanner"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 33
+what = '''
+The class docstring lists heading, clearance and velocity; plan() actually scores heading,
+clearance, speed, turn, goal distance, path distance and progress. The comment at l.255-257 also
+omits path/progress/turn. track_movers says "cells"; plan() Args do not mention units.
+'''
+why = '''
+Readers tuning the planner get the wrong picture.
+'''
+evidence = '''
+Read l.30-37, 255-267, 114-120.
+'''
+hint = '''
+Document all terms, their weights and units.
+'''
+
+[[finding]]
+id = "DW-104"
+title = "Debug string is built on every call even when DEBUG is off"
+severity = "low"
+category = "performance"
+file = "navi_bot/planners/dwa.py"
+anchor = "logger.debug(\"CLOUD \" + \" \".join(f\"{a:.2f},{b:.2f}\" for a, b in cloud_ends[::stride]))"
+symbol = "DWAPlanner.plan"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 274
+what = '''
+The concatenation and join run before logger.debug checks the level; cloud_ends is also
+collected for every candidate only for this log.
+'''
+why = '''
+Small waste in the hottest loop.
+'''
+evidence = '''
+Read l.272-274.
+'''
+hint = '''
+Guard with logger.isEnabledFor(logging.DEBUG) or use lazy %-formatting.
+'''
+
+[[finding]]
+id = "DW-105"
+title = "Window inverts when current speed exceeds the limit, sampling commands above max_vel_x"
+severity = "low"
+category = "robustness"
+file = "navi_bot/planners/dwa.py"
+anchor = "v_min = max(v_min_s, v_min_d)"
+symbol = "DWAPlanner.compute_dynamic_window"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 304
+what = '''
+If current_v > max_vel_x + accel*dt, v_min (from V_d) exceeds v_max (from V_s), and
+linspace(v_min, v_max) samples speeds between them, all above the limit.
+'''
+why = '''
+Over-limit commands after any overspeed (odometry noise, external push).
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+code_review/evidence/reviewer-scripts/src_planners/dwa_probe.py ->
+"compute_dynamic_window((2.0,0),0.5) -> (1.75, 1.0, -0.75, 0.75)".
+'''
+hint = '''
+Clamp the window to the static limits after intersecting (if v_min > v_max, use the nearest
+feasible bound).
+'''
+
+[[finding]]
+id = "DW-106"
+title = "Magic number 17 freezes mover prediction at 1.7 s of a 2.0 s horizon"
+severity = "low"
+category = "style"
+file = "navi_bot/planners/dwa.py"
+anchor = "t = min(i, 17.0) * step_time"
+symbol = "DWAPlanner.score_trajectory"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 322
+what = '''
+Poses 18-20 are compared against the mover's 1.7 s position. The constant is undocumented and
+tied to time_horizon/step_time, which are also hard-coded locals (l.183-184).
+'''
+why = '''
+Fragile coupling: changing the horizon silently changes prediction behaviour.
+'''
+evidence = '''
+Read l.183-186 and l.322.
+'''
+hint = '''
+Name the constant (e.g. MAX_PREDICTION_TIME) and derive the steps from it.
+'''
+
+[[finding]]
+id = "AS-104"
+title = "A* is optimal: 3000 random grids match an independent Dijkstra (Euclidean heuristic admissible/consistent)"
+severity = "info"
+category = "logic"
+file = "navi_bot/planners/astar.py"
+anchor = "\"\"\"Euclidian distance heuristic.\"\"\""
+symbol = "heuristic_forward"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 156
+what = '''
+Euclidean heuristic is admissible and consistent for unit/sqrt(2) costs with no corner cutting;
+octile distance would be tighter (fewer expansions) and is still consistent.
+'''
+why = '''
+Positive verification; octile would speed up searches.
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+code_review/evidence/reviewer-scripts/src_planners/astar_probe.py -> "3000 grids: cost
+mismatches=0, reachability mismatches=0".
+'''
+hint = '''
+Optional: switch to octile distance for fewer expansions; fix "Euclidian" typo.
+'''
+
+[[finding]]
+id = "MPC-101"
+title = "mpc.py is an empty stub, and its comment contradicts the D* role description"
+severity = "info"
+category = "dead-code"
+file = "navi_bot/planners/mpc.py"
+anchor = "pass"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+known_wip = true
+reviewed_line = 3
+what = '''
+The module contains only a comment and `pass`; the comment says D* Lite is for global planning
+while dstar_lite.py says local.
+'''
+why = '''
+Expected WIP; noted for completeness.
+'''
+evidence = '''
+Read mpc.py l.1-3.
+'''
+hint = '''
+Leave as is until implemented; align the role docs.
+'''

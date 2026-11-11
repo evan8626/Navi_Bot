@@ -1,0 +1,541 @@
+# Control (kinematics, PID, path following)
+#
+# Curated code-review findings. One [[finding]] per defect.
+# `anchor` is a literal piece of the offending line; the report re-locates it on
+# every build, so line numbers never go stale. See code_review/README.md for the
+# field reference and how findings are marked fixed.
+
+[[finding]]
+id = "MC-002"
+title = "Setting a new goal keeps the old PID state: the first command can be full reverse"
+severity = "high"
+category = "bug"
+file = "navi_bot/control/motion_controller.py"
+anchor = "self.current_goal = (x, y, theta)"
+symbol = "MotionController.set_goal"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+set_goal() replaces the goal but leaves both PID controllers' integral and prev_error from the
+previous goal. The distance error jumps when the goal changes, and the derivative term reads
+that jump as motion.
+'''
+why = '''
+Switching from a goal 4 m ahead to one 1 m ahead in the same direction commands -1.0 m/s for a
+cycle. The accumulated integral from the old goal also carries over.
+'''
+hint = '''
+A new goal is a new control problem; reset() already exists.
+'''
+
+[[finding]]
+id = "PF-001"
+title = "The path follower can send the robot back to a waypoint it has already passed"
+severity = "high"
+category = "logic"
+file = "navi_bot/control/path_follower.py"
+anchor = "while self.wp_idx < last and math.hypot(self.path[self.wp_idx][0] - x,"
+symbol = "PathFollower.target"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+Progress advances only when the robot comes within wp_tol (0.6) of the current waypoint, in
+order. If the robot passes a waypoint at a greater distance - which is what DWA does when it
+swerves around something - wp_idx stays put, and once that waypoint is more than the lookahead
+away, target() returns it even though it is behind.
+'''
+why = '''
+One obstacle sitting on (or near) a waypoint is enough: the robot cannot get within 0.6 of it,
+drives past, and is then steered back towards it. This is the production follower used by
+robot_controller.
+'''
+hint = '''
+Progress along a path is better measured by where the robot is relative to the path (its closest
+point) than by a checklist of waypoints it must touch.
+'''
+
+[[finding]]
+id = "PU-001"
+title = "Pure pursuit stops a full lookahead distance short of the goal"
+severity = "high"
+category = "bug"
+file = "navi_bot/control/pure_pursuit.py"
+anchor = "for i, coord in enumerate(path[self.waypoint:], start=self.waypoint):"
+symbol = "PurePursuitController.find_next_lookahead"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+find_next_lookahead() returns the first waypoint at least lookahead_distance away. Near the end
+of the path no remaining waypoint is that far, the loop finishes without returning, and the
+function falls off the end (None). pure_pursuit() turns None into (0, 0). The `if self.waypoint
+>= path_len` branch that was meant to handle the end is unreachable, because waypoint is only
+ever set to a valid index.
+'''
+why = '''
+The robot halts 2 m before every goal and never arrives. The tests reach the 'end of path'
+branch only by assigning waypoint = len(path) by hand.
+'''
+hint = '''
+What should the lookahead point be when the path's end is closer than the lookahead distance?
+'''
+
+[[finding]]
+id = "PU-003"
+title = "The controller remembers its position in the previous path when given a new one"
+severity = "high"
+category = "bug"
+file = "navi_bot/control/pure_pursuit.py"
+anchor = "self.waypoint = 0 # current waypoint"
+symbol = "PurePursuitController.__init__"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+The path is passed on every call, but progress along it lives in self.waypoint and is never
+reset.
+'''
+why = '''
+The second leg of a mission starts part-way along its path. A reviewer traced waypoint_nav_test
+TEST 7 driving straight through an occupied cell for exactly this reason - and passing, because
+that suite has no collision check.
+'''
+hint = '''
+Either the controller owns the path (set it once, reset progress with it) or it owns no state at
+all.
+'''
+
+[[finding]]
+id = "KN-001"
+title = "Clipping each wheel separately changes the turn the planner asked for"
+severity = "medium"
+category = "logic"
+file = "navi_bot/control/kinematics.py"
+anchor = "v_left = self.limit_wheel_velocity(v_left)"
+symbol = "DifferentialDriveKinematics.inverse_kinematics"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+inverse_kinematics() saturates the left and right wheel speeds independently. When only the
+outer wheel saturates, the ratio between the wheels - which sets the turn radius - changes.
+'''
+why = '''
+A saturated command does not follow the planned arc more slowly; it follows a different, wider
+arc, which is how a robot clips the corner it was told to avoid.
+'''
+hint = '''
+Think about what must be preserved when a command is infeasible: the path (curvature) or the
+speed?
+'''
+
+[[finding]]
+id = "MC-001"
+title = "The first PID update produces a derivative kick"
+severity = "medium"
+category = "logic"
+file = "navi_bot/control/motion_controller.py"
+anchor = "derivative = (error - self.prev_error) / dt"
+symbol = "PIDController.update"
+source = "lead"
+confidence = "reproduced"
+what = '''
+prev_error starts at 0, so on the first call the derivative term sees the whole error appear in
+one time step: error / dt.
+'''
+why = '''
+With the shipped gains a goal 0.5 m away commands full speed for one cycle where the
+proportional term alone asks for 0.25 m/s. The test suite asserts this kick as the expected
+behaviour.
+'''
+hint = '''
+The derivative of a signal you have seen only once is unknown; decide what the controller should
+assume.
+'''
+
+[[finding]]
+id = "MC-101"
+title = "Anti-windup blocks integral unwinding while saturated"
+severity = "medium"
+category = "logic"
+file = "navi_bot/control/motion_controller.py"
+anchor = "self.integral -= error * dt"
+symbol = "PIDController.update"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 70
+what = '''
+On saturation the integral increment is always undone, even when the error has the opposite sign
+to the saturation (i.e. the integral would be unwinding). Also dt<0 is integrated (only the
+derivative guards dt>0), and the derivative uses prev_error=0 on the first call -> derivative
+kick; prev_time is set but never used.
+'''
+why = '''
+After a large accumulated integral the controller stays saturated longer than necessary
+(overshoot); the first command after construction/reset has a huge D spike.
+'''
+evidence = '''
+python code_review/evidence/reviewer-scripts/src_nodes/control_repro.py: 'saturated while error
+opposes integral: output 1.0 integral 3.0 (expected to decrease to 2.995)'; 'first
+update(error=5.0, dt=0.02) -> 27.501 (kp*e = 2.5; ... derivative kick 25.0)'; 'dt<0 -> ...
+integral after dt<0 -0.1'.
+'''
+hint = '''
+Only skip integration when error and saturation have the same sign (conditional
+integration/clamping); ignore dt<=0; skip D on the first sample.
+'''
+
+[[finding]]
+id = "MC-104"
+title = "Angular PID state shared between heading error and final-orientation error; never reset on set_goal"
+severity = "medium"
+category = "logic"
+file = "navi_bot/control/motion_controller.py"
+anchor = "omega = self.angular_pid.update(angle_error, dt)"
+symbol = "MotionController.compute_control"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 136
+what = '''
+The same angular_pid integrates heading-to-goal error during travel and goal-orientation error
+inside tolerance; set_goal does not reset either PID. A switch of error signal produces a
+derivative spike and carries the integral.
+'''
+why = '''
+With prev_error=1.5 from the orientation phase, a new goal straight ahead (heading_error 0)
+yields omega=-2.0 (saturated) on the first cycle.
+'''
+evidence = '''
+python code_review/evidence/reviewer-scripts/src_nodes/control_repro.py: 'after set_goal with
+stale angular PID state (prev_error=1.5): heading_error=0 -> omega -2.0'.
+'''
+hint = '''
+Reset PIDs in set_goal and when switching between travel and final-orientation phases (or use
+separate controllers).
+'''
+
+[[finding]]
+id = "MC-105"
+title = "Linear PID is fed an always-positive distance: drives forward even when the goal is behind"
+severity = "medium"
+category = "logic"
+file = "navi_bot/control/motion_controller.py"
+anchor = "v = self.linear_pid.update(distance_error, dt)"
+symbol = "MotionController.compute_control"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 142
+what = '''
+distance_error = hypot(dx,dy) >= 0, so v is never negative and is only halved when
+|heading_error| > pi/4. With the goal 1 m behind, v = +0.5 m/s, driving away while turning. The
+integral of an always-positive error only grows.
+'''
+why = '''
+Overshoot cannot be corrected by reversing and causes a wide loop-back; integral windup toward
+the limit.
+'''
+evidence = '''
+python code_review/evidence/reviewer-scripts/src_nodes/control_repro.py: 'goal 1 m BEHIND
+(heading err pi): v = 0.5 (positive -> drives away from goal while turning)'.
+'''
+hint = '''
+Use the along-heading projection (distance*cos(heading_error)) as the linear error, or set v=0
+until heading error is small.
+'''
+
+[[finding]]
+id = "PU-002"
+title = "Curvature is computed from the nominal lookahead, not the distance to the chosen point"
+severity = "medium"
+category = "logic"
+file = "navi_bot/control/pure_pursuit.py"
+anchor = "k = (2 * np.sin(alpha)) / self.lookahead_distance"
+symbol = "PurePursuitController.pure_pursuit"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+The pure-pursuit arc through a target at distance d has curvature 2 sin(alpha) / d. The code
+divides by lookahead_distance, but the chosen waypoint is merely AT LEAST that far away - with
+sparse waypoints it can be several times further.
+'''
+why = '''
+On sparse paths the robot steers much harder than the geometry requires (3.5x in the probe's
+example) and oscillates about the path.
+'''
+hint = '''
+Use the same distance for choosing the point and for the curvature formula.
+'''
+
+[[finding]]
+id = "PU-004"
+title = "The lookahead search can pick a waypoint behind the robot"
+severity = "medium"
+category = "bug"
+file = "navi_bot/control/pure_pursuit.py"
+anchor = "if(distance(current_pos, coord) >= self.lookahead_distance):"
+symbol = "PurePursuitController.find_next_lookahead"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+The search takes the first waypoint, in list order from the stored index, that is at least one
+lookahead away - with no check that it lies ahead. For a robot that starts part-way along a
+path, the path's first waypoint qualifies.
+'''
+why = '''
+The robot 'tracks' a point directly behind it; with alpha = pi the steering term is zero, so it
+drives straight ahead at full speed regardless of the path.
+'''
+hint = '''
+The lookahead point is defined along the path ahead of the robot's closest point, not by
+distance alone.
+'''
+
+[[finding]]
+id = "PU-103"
+title = "Exhaustion check adds a waypoint COUNT to a distance in metres"
+severity = "medium"
+category = "bug"
+file = "navi_bot/control/pure_pursuit.py"
+anchor = "if difference_to_goal >= path_len + self.lookahead_distance:"
+symbol = "PurePursuitController.find_next_lookahead"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 52
+what = '''
+path_len is len(path) (number of points) but is compared/added to metres (difference_to_goal,
+lookahead_distance). The threshold therefore depends on how densely the path is sampled, not on
+geometry. TEST 15's comments (lines 359-365) rationalise the formula ('path_len + ld = 5 + 1 =
+6') rather than questioning it.
+'''
+why = '''
+Meaningless threshold: a 200-point path never reports exhaustion unless the robot is 200+ m
+away.
+'''
+evidence = '''
+Read lines 49-53 and tests/pure_pursuit_test.py 359-368.
+'''
+hint = '''
+Decide on a metric condition (e.g. robot within goal tolerance of path[-1]) and test it.
+'''
+
+[[finding]]
+id = "KN-101"
+title = "No validation of wheel_base/wheel_radius; units of max_wheel_speed are confusing"
+severity = "low"
+category = "robustness"
+file = "navi_bot/control/kinematics.py"
+anchor = "omega = (v_right - v_left) / self.L"
+symbol = "DifferentialDriveKinematics.forward_kinematics"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 64
+what = '''
+wheel_base=0 gives ZeroDivisionError (floats) or inf (numpy); compute_pose_update has the same
+hazard for omega near threshold. max_wheel_speed is documented as rad/s and multiplied by r to
+get m/s, while inverse_kinematics documents m/s wheel speeds - the class mixes wheel-angular and
+wheel-linear speeds. 'Compute post change' typo.
+'''
+why = '''
+Bad config yields crashes/inf rather than an error at construction.
+'''
+evidence = '''
+python code_review/evidence/reviewer-scripts/src_nodes/control_repro.py: 'wheel_base=0
+forward_kinematics -> ZeroDivisionError division by zero', numpy inputs -> '(np.float64(0.55),
+np.float64(inf))'.
+'''
+hint = '''
+Validate positive geometry in __init__; name units explicitly (max_wheel_speed_rad_s).
+'''
+
+[[finding]]
+id = "MC-102"
+title = "compute_control docstring says it returns None with no goal; it returns (0.0, 0.0)"
+severity = "low"
+category = "docs"
+file = "navi_bot/control/motion_controller.py"
+anchor = "(v, omega) velocity commands, or None if no goal"
+symbol = "MotionController.compute_control"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 113
+what = '''
+Line 113 documents a None return; line 116 returns (0.0, 0.0). Also dead state:
+PIDController.prev_time (line 34) and the deque import (line 9) are never used; class docstring
+typo 'Angualr'.
+'''
+why = '''
+Callers may add None handling that is never exercised, or rely on the wrong contract.
+'''
+evidence = '''
+Read lines 113-116, 34, 9.
+'''
+hint = '''
+Fix the docstring; remove prev_time and the unused import.
+'''
+
+[[finding]]
+id = "MC-103"
+title = "Goal-tolerance boundary differs between compute_control (<) and is_goal_reached (>)"
+severity = "low"
+category = "logic"
+file = "navi_bot/control/motion_controller.py"
+anchor = "if distance_error < self.goal_tolerance:"
+symbol = "MotionController.compute_control"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 131
+what = '''
+At distance == goal_tolerance, is_goal_reached returns True (it only fails on distance > tol,
+line 162) while compute_control still drives (it stops only on distance < tol). No test covers
+the boundary.
+'''
+why = '''
+A caller that stops issuing commands on is_goal_reached and one that trusts compute_control
+disagree at the boundary; minor but a classic off-by-epsilon inconsistency.
+'''
+evidence = '''
+Read lines 131 and 162.
+'''
+hint = '''
+Use the same comparison in both methods (compute_control could call is_goal_reached).
+'''
+
+[[finding]]
+id = "MC-106"
+title = "normalize_angle duplicated from utils/geometry and loops forever on inf"
+severity = "low"
+category = "duplication"
+file = "navi_bot/control/motion_controller.py"
+anchor = "while angle > np.pi:"
+symbol = "MotionController.normalize_angle"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 173
+what = '''
+MotionController.normalize_angle is a copy of navi_bot/utils/geometry.normalize_angle
+(geometry.py 73-79). Both use while-loops: inf - 2*pi == inf, so an inf input never terminates
+(NaN returns NaN silently).
+'''
+why = '''
+Duplicate logic drifts; a single bad pose (inf theta from a division by zero upstream) hangs the
+50 Hz control loop.
+'''
+evidence = '''
+Read: motion_controller.py 171-177 and geometry.py 73-79 are identical loops; inf - 2*pi == inf
+in IEEE-754.
+'''
+hint = '''
+Use geometry.normalize_angle everywhere and implement it as math.atan2(math.sin(a), math.cos(a))
+(or a modulo), which is O(1) and terminates for all inputs.
+'''
+
+[[finding]]
+id = "PF-002"
+title = "A path that ends near where it starts is 'complete' before the robot moves"
+severity = "low"
+category = "logic"
+file = "navi_bot/control/path_follower.py"
+anchor = "return math.hypot(gx - x, gy - y) <= self.goal_tol"
+symbol = "PathFollower.goal_reached"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+goal_reached() looks only at the distance to the final waypoint.
+'''
+why = '''
+A loop or out-and-back route is reported as finished on the first control cycle.
+'''
+hint = '''
+Arrival should require having progressed along the path as well as being near its end.
+'''
+
+[[finding]]
+id = "PF-101"
+title = "Stale frame docstring and tolerances that do not match the metric pipeline or config"
+severity = "low"
+category = "docs"
+file = "navi_bot/control/path_follower.py"
+anchor = "(row, col) grid cells today; world metres once the world<->grid boundary"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 15
+what = '''
+The docstrings in path_follower and robot_controller say waypoints are grid cells "today", but
+path_planner already publishes world metres. The defaults wp_tol 0.6 / goal_tol 0.7 / lookahead
+1.0 are sim-cell-sized: in metres that is 12/14/20 waypoints of 0.05 m, and goal_tol 0.7 m vs
+config navigation.goal_distance_tolerance 0.1 m.
+'''
+why = '''
+Arrival is declared 0.7 m short of the goal; docs mislead about the frame.
+'''
+evidence = '''
+Read path_follower.py l.14-16, 33; path_planner.py l.124-126 (grid_to_world before publish);
+config/control_params.yaml goal_distance_tolerance 0.1.
+'''
+hint = '''
+Update the docs; take the tolerances from config in metres.
+'''
+
+[[finding]]
+id = "PU-101"
+title = "Pure pursuit docstring says 'lookbehind'; 'father'; pure_pursuit not used by any node"
+severity = "low"
+category = "docs"
+file = "navi_bot/control/pure_pursuit.py"
+anchor = "Implements pure pursuit control algorithm which uses a lookbehind"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 5
+what = '''
+Module docstring describes a 'lookbehind', comment says 'faster = father'. Nothing in the ROS
+nodes uses PurePursuitController (robot_controller uses PathFollower+DWA) although README lists
+'Local trajectory following via Pure Pursuit'. Unused import 'logging' is used but 'MAX_*' as
+silent clamps rather than validation.
+'''
+why = '''
+Misleading docs about what the shipped controller does.
+'''
+evidence = '''
+grep PurePursuitController in navi_bot: only its own module; README.md:16.
+'''
+hint = '''
+Fix wording and state in README that pure pursuit is a standalone/unused component.
+'''
+
+[[finding]]
+id = "PU-102"
+title = "Constructor clamps only the upper bound; lookahead <= 0 or negative velocity accepted"
+severity = "low"
+category = "robustness"
+file = "navi_bot/control/pure_pursuit.py"
+anchor = "if lookahead > MAX_LOOKAHEAD:"
+symbol = "PurePursuitController.__init__"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 27
+what = '''
+lookahead=0 makes k = 2 sin(alpha)/0 (numpy inf/nan with a RuntimeWarning) and negative
+lookahead flips steering; negative linear_velocity is accepted. TESTs 1-4 only test the upper
+clamp. Also the docstring says pure pursuit 'uses a lookbehind' (line 5) and has typo 'father'
+(line 42); the per-call logger.info on exhaustion (line 67) spams at control rate; return (0, 0)
+uses ints vs float tuple elsewhere.
+'''
+why = '''
+Silent nonsense commands from a bad parameter; misleading docs.
+'''
+evidence = '''
+Read lines 5, 27-35, 42, 67-68, 73.
+'''
+hint = '''
+Validate lookahead > 0 and 0 <= v at construction (raise ValueError) and add tests; fix
+docstring.
+'''

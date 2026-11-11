@@ -1,0 +1,413 @@
+# Project infrastructure (CI, packaging, docs, config)
+#
+# Curated code-review findings. One [[finding]] per defect.
+# `anchor` is a literal piece of the offending line; the report re-locates it on
+# every build, so line numbers never go stale. See code_review/README.md for the
+# field reference and how findings are marked fixed.
+
+[[finding]]
+id = "CI-001"
+title = "CI can only fail if the LAST test suite fails"
+severity = "critical"
+category = "tests"
+file = ".github/workflows/test.yml"
+anchor = "python tests/AStar_planner_test.py"
+source = "lead"
+confidence = "confirmed"
+also_reported = 2
+what = '''
+All 18 suites run as separate lines of one `run:` block on windows-latest, whose shell is
+PowerShell. PowerShell does not stop when a native command (python) exits non-zero. GitHub
+appends `exit $LASTEXITCODE` to the script, so the step's status is the exit code of the final
+line alone.
+'''
+why = '''
+17 of the 18 suites can fail outright and the workflow stays green. The badge has not been
+telling you what you think it has.
+'''
+evidence = '''
+Reproduced locally with GitHub's wrapper under Windows PowerShell 5.1: a script whose first
+python command exits 1 and whose second exits 0 printed both and finished with exit code 0.
+(pwsh 7 is not installed on this machine; it treats native exit codes the same way unless
+PSNativeCommandUseErrorActionPreference is enabled, which GitHub does not do.)
+'''
+hint = '''
+Options: one step per suite, a bash shell (which fails fast), or a single runner script that
+aggregates exit codes.
+'''
+
+[[finding]]
+id = "CF-101"
+title = "config/*.yaml are loaded by nothing and disagree with code constants and the map generator"
+severity = "medium"
+category = "config"
+file = "config/mission_config.yaml"
+anchor = "pickup_station_1:"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 5
+what = '''
+No module reads robot_params/control_params/mission_config. Disagreements: stations here
+(pickup_station_1 (2.0,1.0), delivery_station_1 (2.0,8.0), charging (0.5,0.5)) vs
+generate_map.py (pickup_1 (3.0,0.9), delivery_1 (3.0,9.1), charging (0.9,9.0));
+pickup/delivery_duration 5.0 s vs state_machine 2.0 s timers; goal_angle_tolerance 0.087 vs
+MotionController 0.1; waypoint_tolerance 0.2 vs PathFollower wp_tol 0.6; replan_frequency 2 Hz
+vs path_planner 10 Hz timer; dwa clearance_weight 2.0 / velocity_weight 0.5 vs DWA
+obstacle_cost_gain 1.0 / speed_cost_gain 1.0; obstacle_inflation_radius 0.3 vs ROBOT_RADIUS
+0.25; robot_params battery 10000 mAh / 12 V vs README 2S 5200 mAh 7.4 V; 1 deg LIDAR increment
+vs the README's RPLiDAR C1.
+'''
+why = '''
+Editing the config changes nothing; the documented values mislead tuning and mission setup.
+'''
+evidence = '''
+grep -rln 'yaml|robot_params|control_params|mission_config' navi_bot -> only map_publisher.py
+(map yaml). Values read from the files cited.
+'''
+hint = '''
+Load them (or convert to ros__parameters files + declare_parameter) as the single source of
+truth; derive station coordinates from the map.
+'''
+
+[[finding]]
+id = "CI-003"
+title = "CI tests one OS and one Python - neither is what the robot runs"
+severity = "medium"
+category = "standards"
+file = ".github/workflows/test.yml"
+anchor = "runs-on: windows-latest"
+source = "lead"
+confidence = "reproduced"
+open_if_absent = "ubuntu"
+what = '''
+The workflow runs only on windows-latest with Python 3.14, on push only. The ROS 2 environment
+is Python 3.12 and the deployment target (RDK X5) is Linux.
+'''
+why = '''
+Version- and platform-specific breakage (path handling, removed APIs, wheels missing for 3.14)
+is found on the robot instead of in CI. There is no lint step although package.xml declares
+ament_flake8 and ament_pep257.
+'''
+hint = '''
+A build matrix costs a few lines.
+'''
+
+[[finding]]
+id = "DOC-001"
+title = "The README's project structure omits nine source files"
+severity = "medium"
+category = "docs"
+file = "README.md"
+anchor = "## Project Structure"
+source = "lead"
+confidence = "reproduced"
+what = '''
+ros_compat.py, map_publisher.py, path_follower.py, mpc.py, generate_map.py and four test suites
+post-date the tree in the README. The navi_bot_interfaces package and the launch and maps
+tooling are not described either.
+'''
+why = '''
+The README is the first thing a reviewer or recruiter reads; it currently describes an earlier
+project.
+'''
+hint = '''
+Generate the tree, or shorten it to the directories and what each is for.
+'''
+
+[[finding]]
+id = "DOC-101"
+title = "README overstates status and is out of date with the tree"
+severity = "medium"
+category = "docs"
+file = "README.md"
+anchor = "| State machine | Complete, tested |"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 159
+what = '''
+Status marks State machine, LIDAR processor, Pure Pursuit, Path planner node and Waypoint nav
+'Complete, tested' despite the defects above (no delivery goal, periodic dwell timers, crash on
+real OccupancyGrid, pure pursuit stopping short). Structure omits map_publisher.py,
+ros_compat.py, control/path_follower.py, planners/mpc.py, maps/generate_map.py and tests
+map_publisher/robot_controller/scan_matching/warehouse_map; 'robot.launch.py # ... sensors' is
+false; the mock is said to behave 'exactly as they would on real hardware'; 'CI runs the active
+suites on every push' while CI masks failures; battery spec contradicts robot_params.yaml.
+'''
+why = '''
+Portfolio readers and the owner get a wrong picture of what works.
+'''
+evidence = '''
+README.md:57-121, 125, 139, 149-170 vs git ls-files and the findings above.
+'''
+hint = '''
+Regenerate the structure listing, align status with reality, fix the CI/mock claims.
+'''
+
+[[finding]]
+id = "PK-001"
+title = "websockets is imported by the package but not declared as a dependency"
+severity = "medium"
+category = "config"
+file = "setup.py"
+anchor = "install_requires=["
+source = "lead"
+confidence = "reproduced"
+what = '''
+navi_bot/utils/websocket.py imports websockets; install_requires lists only setuptools, numpy
+and scikit-learn.
+'''
+why = '''
+A clean install (including CI's `pip install -e .`) cannot import the module. package.xml
+likewise declares no dependency for numpy or scikit-learn, so rosdep cannot install them, while
+it does declare tf2_ros, which nothing uses.
+'''
+hint = '''
+Derive the dependency lists from what the code imports.
+'''
+
+[[finding]]
+id = "CF-001"
+title = "Battery figures in the config contradict the hardware in the README"
+severity = "low"
+category = "docs"
+file = "config/robot_params.yaml"
+anchor = "nominal_voltage: 12.0    # volts"
+source = "lead"
+confidence = "confirmed"
+what = '''
+robot_params.yaml describes a 12.0 V, 10000 mAh battery. The README's bill of materials lists a
+2S LiPo: 7.4 V, 5200 mAh - which also cannot feed the listed 3-4S power board or the 12 V motors
+directly.
+'''
+why = '''
+Whichever is right, the other will mislead whoever sizes the power stage or writes the battery
+monitor.
+'''
+evidence = '''
+README.md 'Power' table: 'Zeee 2S LiPo 5200mAh 7.4V 80C' and 'XT60 3-4S PDB'; 'Drive motors:
+2208 3-Phase BLDC, 12V'. config/robot_params.yaml: capacity 10000, nominal_voltage 12.0. The
+file is not loaded by any code.
+'''
+hint = '''
+Confirm the pack actually on the robot and make both places say so.
+'''
+
+[[finding]]
+id = "CI-002"
+title = "The list of test suites is maintained by hand in three places"
+severity = "low"
+category = "standards"
+file = ".github/workflows/test.yml"
+anchor = "- name: Run tests"
+source = "lead"
+confidence = "reproduced"
+what = '''
+The workflow, the dashboard's TEST_FILES table and the README each list the suites individually.
+'''
+why = '''
+A new suite runs nowhere until someone edits all three; the lists have already drifted
+(scan_matching_test.py is 'ready' in the dashboard but absent from CI and the README).
+'''
+hint = '''
+Discover suites from the tests/ directory in one place and let the others consume it.
+'''
+
+[[finding]]
+id = "ENV-101"
+title = "activate_ros2.ps1: duplicated GALLIUM_DRIVER block and machine-specific hard-coded paths"
+severity = "low"
+category = "duplication"
+file = "activate_ros2.ps1"
+anchor = "$env:GALLIUM_DRIVER = \"llvmpipe\""
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 77
+what = '''
+GALLIUM_DRIVER is set twice with two overlapping comment blocks; $Ros2Root/$Workspace hard-code
+C:\Users\evan8\Downloads\...zip\ros2-windows and C:\Users\evan8\navi_bot_ros2_ws, and pixi is
+assumed at $env:USERPROFILE\.pixi.
+'''
+why = '''
+Script only works on one machine; duplication invites drift.
+'''
+evidence = '''
+Reading activate_ros2.ps1 (two identical assignments). The script did work when dot-sourced for
+this review's real-ROS probes.
+'''
+hint = '''
+Delete the second block; take roots from env vars/parameters with these as defaults.
+'''
+
+[[finding]]
+id = "GI-001"
+title = "Compiled .pyc files are committed to the repository"
+severity = "low"
+category = "config"
+file = ".gitignore"
+anchor = "*.pyc"
+source = "lead"
+confidence = "reproduced"
+what = '''
+Five cpython-311 bytecode files under navi_bot/__pycache__ and navi_bot/utils/__pycache__ are
+tracked.
+'''
+why = '''
+Ignore rules do not apply to files that are already tracked, so they stay in every clone, show
+up in diffs, and are stale (the project no longer runs on 3.11).
+'''
+hint = '''
+git rm --cached removes a file from the index without deleting it from disk.
+'''
+
+[[finding]]
+id = "GI-002"
+title = "The .gitignore ignores itself, so the rules exist only on this machine"
+severity = "low"
+category = "config"
+file = ".gitignore"
+anchor = "# ignore .gitignore file"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+The file lists `.gitignore` and is untracked. It also carries rules for paths that do not exist
+(navi_bot/path_planner/__pycache__, navi_bot/tests/) and five specific .pyc paths made redundant
+by `*.pyc`.
+'''
+why = '''
+A fresh clone has no ignore rules at all: node_modules, __pycache__ and editor settings would
+all show up as untracked. COLCON_IGNORE and package-lock.json are ignored too, so a clone lacks
+the marker that keeps colcon out of node_modules and has no reproducible dashboard install.
+'''
+hint = '''
+Ignore files are normally committed; personal exclusions belong in .git/info/exclude.
+'''
+
+[[finding]]
+id = "GI-003"
+title = "No .gitattributes: line endings are converted implicitly"
+severity = "low"
+category = "config"
+file = ".gitignore"
+source = "lead"
+confidence = "reproduced"
+anchor = ""
+open_if_missing_file = ".gitattributes"
+what = '''
+git warns 'LF will be replaced by CRLF' for 27 tracked files. There is no .gitattributes to pin
+line endings, so they depend on each machine's core.autocrlf.
+'''
+why = '''
+Shell-facing files (the .ps1, launch files, anything with a shebang read on Linux) can break
+when checked out with the other convention, and whole-file diffs appear when contributors'
+settings differ.
+'''
+hint = '''
+A one-line .gitattributes makes the choice explicit.
+'''
+
+[[finding]]
+id = "GM-001"
+title = "World-to-cell conversion is done three different ways"
+severity = "low"
+category = "logic"
+file = "maps/generate_map.py"
+anchor = "cells = {name: (int(round(y / res)), int(round(x / res)))"
+source = "lead"
+confidence = "confirmed"
+what = '''
+stations_connected() uses int(round(v / res)), scatter_boxes() and the station printout use
+int(v / res), and the planner's world_to_grid uses floor. For a station on a cell boundary these
+disagree: delivery_1 at y = 9.1 m is 181.99999999999997 cells, so the connectivity check tests
+row 182 while the planner uses row 181.
+'''
+why = '''
+The generator's 'every station is reachable' guarantee is verified for a neighbouring cell, not
+the one the robot will be sent to.
+'''
+evidence = '''
+9.1 / 0.05 evaluates to 181.99999999999997 in IEEE double precision: round() gives 182, int()
+and floor() give 181.
+'''
+hint = '''
+One conversion function, used everywhere - and station coordinates that are not exactly on a
+cell edge.
+'''
+
+[[finding]]
+id = "PK-002"
+title = "The version number is written by hand in three files"
+severity = "low"
+category = "standards"
+file = "setup.py"
+anchor = "version='0.1.0',"
+source = "lead"
+confidence = "reproduced"
+what = '''
+setup.py, package.xml and navi_bot/__init__.py each carry '0.1.0'.
+'''
+why = '''
+They agree today; the first release that bumps one will leave the others behind.
+'''
+hint = '''
+One file should own the version and the others should read it.
+'''
+
+[[finding]]
+id = "PK-101"
+title = "package.xml: unused tf2_ros, missing exec deps (numpy, scikit-learn, launch, launch_ros, rviz2, ament_index_python), lint test deps with no tests"
+severity = "low"
+category = "config"
+file = "package.xml"
+anchor = "<depend>tf2_ros</depend>"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 15
+what = '''
+tf2_ros is never imported. python3-numpy/python3-sklearn and the launch-time packages used by
+launch/*.py and map_publisher are not declared, so rosdep will not install them.
+ament_copyright/flake8/pep257 are test deps but there are no ament tests; tests are custom
+scripts.
+'''
+why = '''
+rosdep install on a clean target (the RDK X5) leaves the package unable to import/launch.
+'''
+evidence = '''
+grep 'tf2' over navi_bot and launch: no hits; numpy/sklearn imported in lidar_processing.py;
+launch_ros/rviz2/ament_index_python used in launch files and map_publisher.py:38.
+'''
+hint = '''
+Drop tf2_ros until TF is used; add exec_depend for python3-numpy, python3-sklearn, launch,
+launch_ros, rviz2, ament_index_python.
+'''
+
+[[finding]]
+id = "PK-102"
+title = "setup.py: deprecated tests_require (pytest unused), missing websockets dep and python_requires"
+severity = "low"
+category = "config"
+file = "setup.py"
+anchor = "tests_require=['pytest'],"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 28
+what = '''
+tests_require is ignored by modern setuptools and the tests are not pytest; websockets
+(utils/websocket.py) is not declared; no python_requires though the code must run on 3.12 (ROS)
+and 3.14 (CI); version 0.1.0 is duplicated in setup.py, package.xml and navi_bot/__init__.py.
+'''
+why = '''
+Installs that look complete are not; version drift risk.
+'''
+evidence = '''
+Reading setup.py:18-28; misc_repro.py: 'No module named websockets'.
+'''
+hint = '''
+Remove tests_require, add websockets (or an extra), set python_requires, single-source the
+version.
+'''

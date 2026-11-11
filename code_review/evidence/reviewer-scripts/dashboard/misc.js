@@ -1,0 +1,10 @@
+const path=require('path');
+console.log('UNC testsDir:', path.win32.join('\\attacker\share\tests','x.py'), '| cwd', path.win32.dirname('\\attacker\share\tests'));
+console.log('traversal file:', path.win32.join('C:\Users\me\Navi Bot\tests','..\..\Downloads\evil.py'));
+const b=Buffer.from('TEST 19: Planning — path','utf8'); const i=b.indexOf(0xe2)+1;
+console.log('split chunk decode:', JSON.stringify(b.slice(0,i).toString()+b.slice(i).toString()));
+console.log('Object.entries on 2D explored ->', Object.entries([[true,false],[false,true]]).map(([k])=>k.split(',').map(Number)));
+const {spawn}=require('child_process');
+const p=spawn('definitely_not_a_cmd_xyz',['-u','x.py']);
+p.on('error',e=>console.log('event error', e.code));
+p.on('close',c=>console.log('event close', c));

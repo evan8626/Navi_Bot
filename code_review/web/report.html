@@ -1,0 +1,872 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src data:">
+<title>Navi Bot - code review</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --raised: #ffffff; --sunken: #f1f0ec;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #77756f; --hairline: #e1e0d9; --border: rgba(11,11,11,.12);
+  --accent: #256abf; --accent-soft: #e6f0fc; --focus: #2a78d6;
+  --sev-critical: #d03b3b; --sev-high: #ec835a; --sev-medium: #fab219; --sev-low: #2a78d6; --sev-info: #898781;
+  --good: #0ca30c; --good-ink: #006300; --good-soft: #e7f5e7;
+  --code-bg: #f4f3ef; --focus-line: #fff4cf; --bar: #86b6ef;
+  --shadow: 0 1px 2px rgba(11,11,11,.06), 0 4px 14px rgba(11,11,11,.05);
+  --mono: ui-monospace, "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --raised: #222221; --sunken: #141413;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #94928b; --hairline: #2c2c2a; --border: rgba(255,255,255,.12);
+    --accent: #6da7ec; --accent-soft: #16263b; --focus: #6da7ec;
+    --sev-low: #3987e5; --good-ink: #5fd35f; --good-soft: rgba(12,163,12,.16);
+    --code-bg: #141413; --focus-line: #3a3212; --bar: #1c5cab;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --raised: #222221; --sunken: #141413;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #94928b; --hairline: #2c2c2a; --border: rgba(255,255,255,.12);
+  --accent: #6da7ec; --accent-soft: #16263b; --focus: #6da7ec;
+  --sev-low: #3987e5; --good-ink: #5fd35f; --good-soft: rgba(12,163,12,.16);
+  --code-bg: #141413; --focus-line: #3a3212; --bar: #1c5cab;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.35);
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--page); color: var(--ink);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-text-size-adjust: 100%; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+code, .mono { font-family: var(--mono); font-size: .9em; }
+code { background: var(--code-bg); padding: .08em .35em; border-radius: 4px; overflow-wrap: anywhere; }
+h1, h2, h3 { margin: 0; line-height: 1.25; }
+.wrap { max-width: 1240px; margin: 0 auto; padding: 0 24px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- top bar ---------- */
+.topbar { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--page) 88%, transparent);
+  backdrop-filter: blur(8px); border-bottom: 1px solid var(--hairline); }
+.topbar .wrap { display: flex; align-items: center; gap: 14px; min-height: 56px; flex-wrap: wrap; padding-block: 8px; }
+.brand { font-weight: 650; font-size: 16px; letter-spacing: -.01em; }
+.brand span { color: var(--muted); font-weight: 500; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px;
+  border: 1px solid var(--border); font-size: 12.5px; color: var(--ink-2); background: var(--surface); white-space: nowrap; }
+.pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.pill.live .dot { background: var(--good); animation: pulse 2s infinite; }
+.pill.busy .dot { background: var(--sev-medium); animation: none; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(12,163,12,.55);} 70% { box-shadow: 0 0 0 7px rgba(12,163,12,0);} 100% { box-shadow: 0 0 0 0 rgba(12,163,12,0);} }
+@media (prefers-reduced-motion: reduce) { .pill.live .dot { animation: none; } html { scroll-behavior: auto; } }
+.meta { color: var(--muted); font-size: 12.5px; }
+.spacer { flex: 1; }
+.ghost { background: transparent; border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px; font-size: 13px; }
+.ghost:hover { background: var(--sunken); }
+
+/* ---------- tabs ---------- */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--hairline); margin: 26px 0 18px; overflow-x: auto; }
+.tab { background: none; border: 0; border-bottom: 2px solid transparent; padding: 9px 14px; font-size: 14.5px;
+  color: var(--ink-2); white-space: nowrap; margin-bottom: -1px; }
+.tab:hover { color: var(--ink); }
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+.tab .count { color: var(--muted); font-weight: 400; margin-left: 5px; font-size: 13px; }
+.view[hidden] { display: none; }
+
+/* ---------- overview ---------- */
+.lede { margin: 26px 0 16px; }
+.lede h1 { font-size: 26px; letter-spacing: -.02em; }
+.lede p { margin: 6px 0 0; color: var(--ink-2); max-width: 78ch; }
+.tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; text-align: left;
+  min-width: 0; }
+button.tile:hover { border-color: var(--ink-2); }
+.tile .label { display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 13px; }
+.tile .label svg { width: 12px; height: 12px; flex: none; }
+.tile .value { font-size: 30px; font-weight: 650; letter-spacing: -.02em; line-height: 1.15; margin-top: 4px; }
+.tile .note { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.tile.hero { grid-column: span 2; background: var(--raised); box-shadow: var(--shadow); }
+.tile.hero .value { font-size: 44px; }
+.tiles.secondary { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 12px; }
+.tiles.secondary .value { font-size: 24px; }
+.delta-good { color: var(--good-ink); font-weight: 600; }
+.grid-2 { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; align-items: start; }
+.stack { display: grid; gap: 16px; min-width: 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; min-width: 0; }
+.card h2 { font-size: 15px; font-weight: 650; }
+.card .sub { color: var(--muted); font-size: 13px; margin: 2px 0 12px; }
+.start-list { list-style: none; margin: 0; padding: 0; }
+.start-list li + li { border-top: 1px solid var(--hairline); }
+.start-item { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; width: 100%; text-align: left; background: none; border: 0;
+  padding: 10px 4px; border-radius: 8px; align-items: baseline; }
+.start-item:hover { background: var(--sunken); }
+.start-item .t { font-weight: 600; }
+.start-item .w { grid-column: 2; color: var(--ink-2); font-size: 13.5px; }
+.area-row { display: grid; grid-template-columns: minmax(0, 1fr) 130px auto; gap: 12px; align-items: center; width: 100%;
+  background: none; border: 0; padding: 7px 4px; border-radius: 8px; text-align: left; }
+.area-row:hover { background: var(--sunken); }
+.area-row .name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.area-row .nums { color: var(--muted); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.track { height: 8px; background: var(--sunken); border-radius: 4px; overflow: hidden; }
+.track > i { display: block; height: 100%; background: var(--bar); border-radius: 0 4px 4px 0; min-width: 2px; }
+.spark { width: 100%; height: 64px; display: block; }
+.spark-wrap { position: relative; }
+.spark-tip { position: absolute; top: -6px; transform: translate(-50%, -100%); background: var(--ink); color: var(--page);
+  font-size: 12px; padding: 3px 8px; border-radius: 6px; white-space: nowrap; pointer-events: none; }
+.spark-tip[hidden] { display: none; }
+
+/* ---------- severity & status marks ---------- */
+.sev { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.sev svg { width: 12px; height: 12px; flex: none; }
+.sev-critical svg { color: var(--sev-critical); } .sev-high svg { color: var(--sev-high); }
+.sev-medium svg { color: var(--sev-medium); } .sev-low svg { color: var(--sev-low); } .sev-info svg { color: var(--sev-info); }
+.badge { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 999px; font-size: 12px;
+  border: 1px solid var(--border); color: var(--ink-2); white-space: nowrap; background: var(--surface); }
+.badge svg { width: 11px; height: 11px; }
+.badge.fixed, .badge.resolved, .badge.likely_fixed { background: var(--good-soft); border-color: transparent; color: var(--good-ink); font-weight: 600; }
+.badge.changed { border-color: var(--ink-2); color: var(--ink); font-weight: 600; }
+.badge.wip { border-style: dashed; }
+.tag { font-size: 12px; color: var(--muted); border: 1px solid var(--hairline); border-radius: 6px; padding: 0 6px; white-space: nowrap; }
+
+/* ---------- filters ---------- */
+.filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+.search { flex: 1 1 260px; min-width: 200px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface); font-size: 13px; }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.chip[aria-pressed="true"] .n { color: inherit; opacity: .75; }
+.chip .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+select { padding: 6px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); max-width: 100%; }
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
+.result-line { display: flex; gap: 12px; align-items: center; color: var(--muted); font-size: 13px; margin: 4px 0 10px; flex-wrap: wrap; }
+.link-btn { background: none; border: 0; padding: 0; color: var(--accent); font-size: 13px; text-align: left; }
+.link-btn:hover { text-decoration: underline; }
+
+/* ---------- finding list ---------- */
+.group-title { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 650; color: var(--ink-2);
+  text-transform: uppercase; letter-spacing: .04em; margin: 22px 0 8px; }
+.group-title .n { color: var(--muted); font-weight: 400; }
+.group-title.plain { text-transform: none; letter-spacing: 0; font-family: var(--mono); }
+.finding { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; overflow: hidden; }
+.finding.is-open { box-shadow: var(--shadow); border-color: var(--ink-2); }
+.finding.done { opacity: .72; }
+.row { display: grid; grid-template-columns: 94px 84px minmax(0, 1fr) auto; gap: 12px; align-items: center; width: 100%;
+  background: none; border: 0; padding: 11px 14px; text-align: left; }
+.row:hover { background: var(--sunken); }
+.row .id { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); }
+.row .title { font-weight: 550; overflow-wrap: anywhere; }
+.row .where { display: block; font-weight: 400; color: var(--muted); font-size: 12.5px; font-family: var(--mono); margin-top: 1px; overflow-wrap: anywhere; }
+.row .right { display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.flash { animation: flash 2.4s ease-out; }
+@keyframes flash { 0% { background: var(--good-soft);} 100% { background: transparent;} }
+.detail { border-top: 1px solid var(--hairline); padding: 16px 18px 18px; display: grid; gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.detail .full { grid-column: 1 / -1; min-width: 0; }
+.detail > div { min-width: 0; }
+.detail h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 650; margin-bottom: 5px; }
+.detail p { margin: 0 0 8px; max-width: 75ch; overflow-wrap: anywhere; }
+.detail p:last-child { margin-bottom: 0; }
+.prov { color: var(--ink-2); font-size: 13px; display: flex; gap: 6px 12px; flex-wrap: wrap; align-items: center; }
+.codebox { border: 1px solid var(--hairline); border-radius: 8px; overflow: hidden; background: var(--code-bg); }
+.codebox .bar { display: flex; justify-content: space-between; gap: 10px; padding: 6px 10px; font-size: 12.5px; color: var(--ink-2);
+  border-bottom: 1px solid var(--hairline); background: var(--surface); flex-wrap: wrap; }
+.codebox pre { margin: 0; padding: 8px 0; overflow-x: auto; font: 12.5px/1.6 var(--mono); }
+.codebox .ln { display: block; padding: 0 12px 0 0; white-space: pre; min-width: max-content; }
+.codebox .ln b { display: inline-block; width: 52px; text-align: right; padding-right: 12px; color: var(--muted); font-weight: 400; user-select: none; }
+.codebox .ln.focus { background: var(--focus-line); }
+.probe { border: 1px solid var(--hairline); border-left: 3px solid var(--sev-critical); border-radius: 8px; padding: 10px 12px; background: var(--raised); }
+.probe.fixed { border-left-color: var(--good); }
+.probe.error { border-left-color: var(--muted); }
+.probe .head { font-size: 13px; font-weight: 600; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.probe .head span { font-weight: 400; color: var(--muted); }
+.probe .head svg { width: 12px; height: 12px; color: var(--good); }
+.probe .foot { color: var(--muted); font-size: 12px; margin-top: 6px; overflow-wrap: anywhere; }
+.hint-box { border: 1px dashed var(--border); border-radius: 8px; padding: 10px 12px; }
+.hint-box summary { cursor: pointer; font-weight: 550; }
+.hint-box[open] summary { margin-bottom: 6px; }
+.triage { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.triage input { flex: 1 1 220px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); }
+.note { color: var(--muted); font-size: 13px; }
+.empty { text-align: center; color: var(--muted); padding: 40px 0; }
+
+/* ---------- tables ---------- */
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--hairline); white-space: nowrap; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; background: var(--sunken); }
+th button { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: var(--sunken); }
+td .path, td.path { font-family: var(--mono); font-size: 12.5px; }
+.cell-bar { display: inline-block; width: 90px; vertical-align: middle; margin-right: 8px; }
+.rule { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; }
+.rule > summary { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto; gap: 12px; padding: 10px 14px; cursor: pointer; align-items: center; list-style: none; }
+.rule > summary::-webkit-details-marker { display: none; }
+.rule > summary:hover { background: var(--sunken); }
+.rule .body { border-top: 1px solid var(--hairline); padding: 12px 16px 14px; }
+.rule .why { color: var(--ink-2); max-width: 85ch; margin: 0 0 10px; }
+.hit-file { margin: 10px 0 4px; font-family: var(--mono); font-size: 12.5px; font-weight: 600; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.hits { margin: 0; padding: 0; list-style: none; font-size: 13px; }
+.hits li { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 8px; padding: 1px 0; }
+.hits a { font-family: var(--mono); font-size: 12.5px; text-align: right; }
+.hits span { overflow-wrap: anywhere; color: var(--ink-2); }
+.about { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.about dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; align-items: baseline; }
+.about dt { font-weight: 600; white-space: nowrap; }
+.about dd { margin: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.about pre { background: var(--code-bg); padding: 10px 12px; border-radius: 8px; overflow-x: auto; font: 12.5px/1.6 var(--mono); margin: 8px 0 0; }
+.toast { position: fixed; right: 20px; bottom: 20px; z-index: 40; background: var(--ink); color: var(--page); padding: 12px 16px;
+  border-radius: 12px; box-shadow: var(--shadow); max-width: min(440px, calc(100vw - 40px)); font-size: 13.5px; }
+.toast b { display: block; margin-bottom: 2px; }
+.toast[hidden] { display: none; }
+footer { color: var(--muted); font-size: 12.5px; padding: 30px 0 50px; }
+
+@media (max-width: 980px) {
+  .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .tile.hero { grid-column: 1 / -1; }
+  .tiles.secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-2, .detail, .about { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .wrap { padding: 0 16px; }
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .row { grid-template-columns: minmax(0, 1fr) auto; }
+  .row .sevcell { justify-self: end; }
+  .row .title, .row .right { grid-column: 1 / -1; }
+  .row .right { justify-content: flex-start; }
+  .area-row { grid-template-columns: minmax(0, 1fr) auto; } .area-row .track { display: none; }
+}
+@media print { .topbar, .tabs, .filters, .triage, .toast { display: none !important; } }
+</style>
+</head>
+<body>
+<header class="topbar"><div class="wrap">
+  <div class="brand">Navi Bot <span>code review</span></div>
+  <span class="pill" id="live-pill"><span class="dot"></span><span id="live-text">snapshot</span></span>
+  <span class="meta" id="meta-line"></span>
+  <span class="spacer"></span>
+  <button class="ghost" id="rebuild-btn" hidden>Re-run all probes</button>
+  <button class="ghost" id="theme-btn" aria-label="Switch between light and dark theme">Theme</button>
+</div></header>
+
+<main class="wrap">
+  <section id="overview" aria-label="Overview"></section>
+
+  <div class="tabs" role="tablist" aria-label="Report sections">
+    <button class="tab" role="tab" data-view="findings">Findings<span class="count" id="tab-findings"></span></button>
+    <button class="tab" role="tab" data-view="files">Files<span class="count" id="tab-files"></span></button>
+    <button class="tab" role="tab" data-view="automated">Style &amp; standards<span class="count" id="tab-automated"></span></button>
+    <button class="tab" role="tab" data-view="tests">Tests<span class="count" id="tab-tests"></span></button>
+    <button class="tab" role="tab" data-view="about">How this works</button>
+  </div>
+
+  <section class="view" id="view-findings" role="tabpanel"></section>
+  <section class="view" id="view-files" role="tabpanel" hidden></section>
+  <section class="view" id="view-automated" role="tabpanel" hidden></section>
+  <section class="view" id="view-tests" role="tabpanel" hidden></section>
+  <section class="view" id="view-about" role="tabpanel" hidden></section>
+  <footer id="footer"></footer>
+</main>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script id="report-data" type="application/json">__REPORT_JSON__</script>
+<script>
+"use strict";
+(() => {
+const SEVERITIES = ["critical", "high", "medium", "low", "info"];
+const OPEN = new Set(["open", "changed", "acknowledged"]);
+const STATUS_LABEL = { open: "Open", changed: "Re-check", fixed: "Fixed", likely_fixed: "Looks fixed",
+  acknowledged: "Acknowledged", wontfix: "Won't fix", resolved: "Resolved" };
+const ICONS = {
+  critical: '<svg viewBox="0 0 12 12" aria-hidden="true"><path fill="currentColor" d="M6 .6 11.4 6 6 11.4.6 6z"/></svg>',
+  high: '<svg viewBox="0 0 12 12" aria-hidden="true"><path fill="currentColor" d="M6 1.2 11.3 10.6H.7z"/></svg>',
+  medium: '<svg viewBox="0 0 12 12" aria-hidden="true"><circle fill="currentColor" cx="6" cy="6" r="4.6"/></svg>',
+  low: '<svg viewBox="0 0 12 12" aria-hidden="true"><rect fill="currentColor" x="1.8" y="1.8" width="8.4" height="8.4" rx="1.6"/></svg>',
+  info: '<svg viewBox="0 0 12 12" aria-hidden="true"><circle fill="none" stroke="currentColor" stroke-width="1.8" cx="6" cy="6" r="3.9"/></svg>',
+  check: '<svg viewBox="0 0 12 12" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M2.2 6.4 4.9 9l4.9-5.6"/></svg>',
+  recheck: '<svg viewBox="0 0 12 12" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M10 6a4 4 0 1 1-1.3-2.9M10 1.6v2.2H7.8"/></svg>',
+};
+const AREA_NAMES = { "10_system_and_nodes.toml": "System wiring & ROS 2 nodes", "20_planners.toml": "Planners (A*, D* Lite, DWA)",
+  "30_control.toml": "Control & path following", "40_sensors.toml": "Sensors (LIDAR, odometry, IMU)",
+  "50_utils_and_mock.toml": "Utilities & ROS mock", "60_project.toml": "CI, packaging, docs, config",
+  "70_dashboard.toml": "Telemetry dashboard", "80_tests.toml": "Test suites" };
+
+let report = JSON.parse(document.getElementById("report-data").textContent);
+const stored = (() => { try { return JSON.parse(localStorage.getItem("navi-review") || "{}"); } catch { return {}; } })();
+const state = {
+  view: stored.view || "findings",
+  q: "", severities: new Set(), status: stored.status || "open", category: "", area: "", source: "", file: "",
+  hideWip: false, groupBy: stored.groupBy || "severity", revealHints: !!stored.revealHints,
+  expanded: new Set(), sort: { key: "weight", dir: -1 }, includeTests: true, recent: [],
+};
+function persist() {
+  try { localStorage.setItem("navi-review", JSON.stringify({ view: state.view, status: state.status,
+    groupBy: state.groupBy, revealHints: state.revealHints, theme: document.documentElement.dataset.theme || "" })); } catch {}
+}
+
+// ---------- helpers ----------
+const $ = (id) => document.getElementById(id);
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+const inlineCode = (escaped) => escaped.replace(/`([^`]+)`/g, "<code>$1</code>");
+function prose(text) {
+  if (!text) return "";
+  return text.split(/\n\s*\n/).map((p) => `<p>${inlineCode(esc(p))}</p>`).join("");
+}
+function firstSentence(text) { const m = (text || "").match(/^.*?[.!?](?=\s|$)/); return m ? m[0] : (text || ""); }
+function sevMark(severity, withLabel = true) {
+  const name = severity[0].toUpperCase() + severity.slice(1);
+  return `<span class="sev sev-${severity}">${ICONS[severity]}<span${withLabel ? "" : ' class="sr-only"'}>${name}</span></span>`;
+}
+function statusBadge(f) {
+  const icon = ["fixed", "resolved", "likely_fixed"].includes(f.status) ? ICONS.check : f.status === "changed" ? ICONS.recheck : "";
+  return `<span class="badge ${f.status}" title="${esc(f.status_detail)}">${icon}${STATUS_LABEL[f.status] || esc(f.status)}</span>`;
+}
+function ago(iso) {
+  const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 50) return "just now";
+  if (seconds < 3300) return `${Math.round(seconds / 60)} min ago`;
+  if (seconds < 82800) return `${Math.round(seconds / 3600)} h ago`;
+  return `${Math.round(seconds / 86400)} d ago`;
+}
+function editorLink(path, line) {
+  const root = report.meta.repo_root.replace(/\\/g, "/");
+  return `vscode://file/${encodeURI(root + "/" + path)}${line ? ":" + line : ""}`;
+}
+function fileRef(path, line) {
+  return `<a href="${esc(editorLink(path, line))}" title="Open in VS Code">${esc(path)}${line ? ":" + line : ""}</a>`;
+}
+const isOpen = (f) => OPEN.has(f.status);
+const areaOf = (f) => AREA_NAMES[f.defined_in] || f.defined_in;
+
+// ---------- overview ----------
+function renderOverview() {
+  const s = report.summary, findings = report.findings;
+  const done = (s.by_status.fixed || 0) + (s.by_status.likely_fixed || 0) + (s.by_status.resolved || 0);
+  const recheck = s.by_status.changed || 0;
+  const probes = report.meta.probe_stats.probes;
+  const tests = report.tests, ran = tests && tests.ran_at;
+  const failing = ran ? tests.suites.filter((t) => t.exit !== 0 && t.exit !== null).length : 0;
+  const criticals = findings.filter((f) => isOpen(f) && f.severity === "critical");
+  const startList = (criticals.length ? criticals : findings.filter((f) => isOpen(f) && f.severity === "high")).slice(0, 8);
+
+  const areas = Object.keys(AREA_NAMES).map((key) => {
+    const mine = findings.filter((f) => f.defined_in === key && isOpen(f));
+    const weight = mine.reduce((sum, f) => sum + report.meta.severity_weight[f.severity], 0);
+    return { key, name: AREA_NAMES[key], open: mine.length, weight,
+      crit: mine.filter((f) => f.severity === "critical").length, high: mine.filter((f) => f.severity === "high").length };
+  });
+  const maxWeight = Math.max(1, ...areas.map((a) => a.weight));
+
+  $("overview").innerHTML = `
+    <div class="lede">
+      <h1>${plural(s.open, "open finding")} across ${plural(s.files, "file")}</h1>
+      <p>Every finding was reviewed by hand, and ${probes} of them are backed by a probe that re-runs the bug against your
+      current code, so they turn <b>Fixed</b> by themselves when you fix them. Style, naming and nesting are re-checked on every save.</p>
+    </div>
+    <div class="tiles">
+      <button class="tile hero" data-status="open" data-sev="">
+        <div class="label">Open findings</div><div class="value">${s.open.toLocaleString()}</div>
+        <div class="note">${done ? `<span class="delta-good">${done} fixed</span> since the review · ` : ""}${s.curated_total} reviewed in total</div>
+      </button>
+      ${SEVERITIES.slice(0, 4).map((sev) => `
+        <button class="tile" data-status="open" data-sev="${sev}">
+          <div class="label">${sevMark(sev)}</div><div class="value">${s.open_by_severity[sev]}</div>
+        </button>`).join("")}
+    </div>
+    <div class="tiles secondary">
+      <button class="tile" data-status="done" data-sev="">
+        <div class="label"><span style="color:var(--good-ink);display:inline-flex">${ICONS.check}</span>Fixed</div>
+        <div class="value">${done}</div><div class="note">verified by probe, pattern or you</div></button>
+      <button class="tile" data-status="changed" data-sev="">
+        <div class="label">${ICONS.recheck}Needs a re-check</div>
+        <div class="value">${recheck}</div><div class="note">code under a finding was edited</div></button>
+      <button class="tile" data-goto="automated">
+        <div class="label">Style &amp; standards</div><div class="value">${s.automated_hits.toLocaleString()}</div>
+        <div class="note">automated hits · docstrings ${s.docstring_coverage ?? "–"}% · type hints ${s.type_hint_coverage ?? "–"}%</div></button>
+      <button class="tile" data-goto="tests">
+        <div class="label">Test suites</div>
+        <div class="value">${ran ? `${tests.suites.length - failing}/${tests.suites.length}` : "not run"}</div>
+        <div class="note">${ran ? (tests.stale ? "results are older than the code" : `passing · ran ${ago(tests.ran_at)}`) : "run them from the Tests tab"}</div></button>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <h2>${criticals.length ? "Start here: the critical findings" : "Start here: the most serious open findings"}</h2>
+        <div class="sub">${criticals.length ? "Each of these stops the robot, a core feature, or the safety net (CI) from working at all." : "No critical findings are open."}</div>
+        <ul class="start-list">${startList.map((f) => `
+          <li><button class="start-item" data-open="${esc(f.id)}">
+            ${sevMark(f.severity, false)}<span class="t">${esc(f.title)}</span>
+            <span class="w">${inlineCode(esc(firstSentence(f.why)))} <span class="mono" style="color:var(--muted)">${esc(f.id)}</span></span>
+          </button></li>`).join("") || '<li class="note" style="padding:10px 4px">Nothing serious is open.</li>'}
+        </ul>
+      </div>
+      <div class="stack">
+        <div class="card">
+          <h2>Where the problems are</h2>
+          <div class="sub">Open findings by area, weighted by severity. Click to filter.</div>
+          ${areas.map((a) => `
+            <button class="area-row" data-area="${esc(a.key)}" title="${a.open} open, ${a.crit} critical, ${a.high} high - weight ${a.weight}">
+              <span class="name">${esc(a.name)}</span>
+              <span class="track" aria-hidden="true"><i style="width:${Math.round(100 * a.weight / maxWeight)}%"></i></span>
+              <span class="nums">${a.open} open${a.crit ? ` · ${a.crit} critical` : ""}</span>
+            </button>`).join("")}
+        </div>
+        <div class="card">
+          <h2>Trend</h2>
+          <div class="sub">Severity-weighted open findings after each change (critical ×10, high ×5, medium ×2, low ×1).</div>
+          ${sparkline(report.history)}
+        </div>
+        ${state.recent.length ? `<div class="card"><h2>Changed this session</h2><div class="sub">Status changes seen while this page was open.</div>
+          <ul class="start-list">${state.recent.slice(0, 8).map((c) => `<li style="padding:6px 4px">${esc(c)}</li>`).join("")}</ul></div>` : ""}
+      </div>
+    </div>`;
+}
+
+function sparkline(history) {
+  if (!history || history.length < 2) {
+    return `<div class="note">The trend line appears after your next change. Current weight: <b>${report.summary.weighted_open}</b>.</div>`;
+  }
+  const points = history.slice(-60), width = 600, height = 64, pad = 6;
+  const values = points.map((p) => p.weighted), max = Math.max(...values), min = Math.min(...values, 0);
+  const x = (i) => pad + (i * (width - 2 * pad)) / (points.length - 1);
+  const y = (v) => height - pad - ((v - min) / Math.max(1, max - min)) * (height - 2 * pad);
+  const path = points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.weighted).toFixed(1)}`).join(" ");
+  const last = points.length - 1;
+  return `<div class="spark-wrap">
+    <svg class="spark" id="spark" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img"
+         aria-label="Weighted open findings went from ${values[0]} to ${values[last]} over ${points.length} builds">
+      <line x1="${pad}" x2="${width - pad}" y1="${height - pad}" y2="${height - pad}" stroke="var(--hairline)" />
+      <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+    </svg><div class="spark-tip" id="spark-tip" hidden></div></div>
+    <div class="note">${values[0]} → <b>${values[last]}</b> over ${points.length} builds</div>`;
+}
+function wireSparkline() {
+  const svg = $("spark"), tip = $("spark-tip");
+  if (!svg) return;
+  const points = report.history.slice(-60);
+  svg.addEventListener("pointermove", (event) => {
+    const box = svg.getBoundingClientRect();
+    const index = Math.min(points.length - 1, Math.max(0, Math.round(((event.clientX - box.left) / box.width) * (points.length - 1))));
+    const p = points[index];
+    tip.textContent = `${p.weighted} weighted · ${Object.values(p.open).reduce((a, b) => a + b, 0)} open · ${new Date(p.at).toLocaleString()}`;
+    tip.style.left = `${Math.min(80, Math.max(20, (index / (points.length - 1)) * 100))}%`;
+    tip.hidden = false;
+  });
+  svg.addEventListener("pointerleave", () => { tip.hidden = true; });
+}
+
+// ---------- findings ----------
+function matchesStatus(f) {
+  if (state.status === "all") return true;
+  if (state.status === "open") return isOpen(f);
+  if (state.status === "done") return !isOpen(f);
+  return f.status === state.status;
+}
+function filteredFindings() {
+  const q = state.q.trim().toLowerCase();
+  return report.findings.filter((f) =>
+    matchesStatus(f) &&
+    (!state.severities.size || state.severities.has(f.severity)) &&
+    (!state.category || f.category === state.category) &&
+    (!state.area || f.defined_in === state.area) &&
+    (!state.source || (state.source === "probe" ? !!f.probe : f.source === state.source)) &&
+    (!state.file || f.file === state.file) &&
+    (!state.hideWip || !f.known_wip) &&
+    (!q || [f.id, f.title, f.file, f.what, f.why, f.category, f.symbol].join(" ").toLowerCase().includes(q)));
+}
+function groupFindings(list) {
+  const order = (a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity) || a.id.localeCompare(b.id);
+  const groups = new Map();
+  const keyOf = { severity: (f) => f.severity, file: (f) => f.file, category: (f) => f.category, area: (f) => areaOf(f) }[state.groupBy];
+  for (const f of [...list].sort(order)) { const k = keyOf(f); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(f); }
+  const entries = [...groups.entries()];
+  if (state.groupBy === "severity") entries.sort((a, b) => SEVERITIES.indexOf(a[0]) - SEVERITIES.indexOf(b[0]));
+  else entries.sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  return entries;
+}
+function provenance(f) {
+  const bits = [];
+  if (f.source === "lead") bits.push("Reviewed by Claude (lead reviewer)");
+  else bits.push("Found by an Opus 5.5 reviewer" + (f.lead_checked ? ", checked by the lead reviewer" : ""));
+  if (f.probe) bits.push("backed by a live probe");
+  else if (f.confidence === "reproduced") bits.push("reproduced with a script");
+  else if (f.confidence === "confirmed") bits.push("confirmed by reading the code");
+  else bits.push("likely, not reproduced");
+  if (f.also_reported) bits.push(`also reported independently by ${plural(f.also_reported, "reviewer")}`);
+  return bits.join(" · ");
+}
+function codeBox(f) {
+  if (!f.excerpt) {
+    return `<div class="codebox"><div class="bar"><span>${fileRef(f.file)}</span>
+      <span>${f.anchor ? "the reviewed line is no longer in this file" : "applies to the whole file"}</span></div></div>`;
+  }
+  const lines = f.excerpt.lines.map((text, i) => {
+    const n = f.excerpt.start + i;
+    return `<span class="ln${n === f.excerpt.focus ? " focus" : ""}"><b>${n}</b>${esc(text) || " "}</span>`;
+  }).join("");
+  return `<div class="codebox"><div class="bar"><span>${fileRef(f.file, f.line)}${f.symbol ? ` · <span class="mono">${esc(f.symbol)}</span>` : ""}</span>
+    <span>${f.touched ? "edited since the review" : "as reviewed"}</span></div><pre>${lines}</pre></div>`;
+}
+function probeBox(f) {
+  const p = f.probe;
+  if (!p) return f.evidence ? `<div class="full"><h3>Evidence</h3>${prose(f.evidence)}</div>` : "";
+  const label = { reproduced: "still reproduces", fixed: "no longer reproduces", error: "could not run" }[p.status];
+  const when = ago(new Date(p.ran_at * 1000).toISOString());
+  const deps = p.deps.map((d) => `<code>${esc(d.split("/").pop())}</code>`).join(" ");
+  return `<div class="full"><h3>Evidence - live probe</h3>
+    <div class="probe ${p.status}">
+      <div class="head">${p.status === "fixed" ? ICONS.check : ""}Probe ${label} <span>· last run ${when} · ${p.seconds} s</span></div>
+      <p style="margin:6px 0 0">${esc(p.detail)}</p>
+      <div class="foot">${esc(p.probe_file)}${deps ? ` re-runs whenever ${deps} change.` : ""}</div>
+    </div>${f.evidence ? prose(f.evidence) : ""}</div>`;
+}
+function hintBox(f) {
+  if (!f.hint) return "";
+  const collapsed = f.learning && !state.revealHints;
+  return `<div class="full"><details class="hint-box"${collapsed ? "" : " open"}>
+    <summary>${collapsed ? "Show a hint towards the fix" : "Direction for a fix"}</summary>
+    ${prose(f.hint)}${f.learning ? '<p class="note">Hints for your own algorithm code stay folded until you ask - tick "Reveal hints" to open them all.</p>' : ""}
+  </details></div>`;
+}
+function triageBox(f) {
+  if (!report.meta.live) {
+    return f.triage ? `<div class="full note">Your decision: ${esc(STATUS_LABEL[f.triage.status])}${f.triage.note ? ` - ${esc(f.triage.note)}` : ""}</div>` : "";
+  }
+  return `<div class="full triage" data-id="${esc(f.id)}">
+    <input type="text" placeholder="Optional note" value="${esc(f.triage?.note || "")}" aria-label="Note for ${esc(f.id)}">
+    <button class="ghost" data-triage="acknowledged">Acknowledge</button>
+    <button class="ghost" data-triage="resolved">Mark resolved</button>
+    <button class="ghost" data-triage="wontfix">Won't fix</button>
+    ${f.triage ? '<button class="ghost" data-triage="clear">Clear my decision</button>' : ""}
+  </div>`;
+}
+function findingCard(f) {
+  const open = state.expanded.has(f.id);
+  const detail = !open ? "" : `<div class="detail" id="detail-${esc(f.id)}">
+      <div class="full prov">${statusBadge(f)}<span>${esc(f.status_detail)}</span><span aria-hidden="true">·</span><span>${esc(provenance(f))}</span></div>
+      <div><h3>What is wrong</h3>${prose(f.what)}</div>
+      <div><h3>Why it matters</h3>${prose(f.why)}</div>
+      <div class="full">${codeBox(f)}</div>
+      ${probeBox(f)}${hintBox(f)}${triageBox(f)}
+    </div>`;
+  return `<article class="finding${open ? " is-open" : ""}${isOpen(f) ? "" : " done"}" id="f-${esc(f.id)}">
+    <button class="row" data-toggle="${esc(f.id)}" aria-expanded="${open}">
+      <span class="id">${esc(f.id)}</span>
+      <span class="sevcell">${sevMark(f.severity)}</span>
+      <span class="title">${esc(f.title)}<span class="where">${esc(f.file)}${f.line ? ":" + f.line : ""}</span></span>
+      <span class="right">${f.known_wip ? '<span class="badge wip" title="Known work in progress">WIP</span>' : ""}
+        ${f.probe ? '<span class="tag" title="Backed by a live reproduction probe">probe</span>' : ""}
+        <span class="tag">${esc(f.category)}</span>${statusBadge(f)}</span>
+    </button>${detail}</article>`;
+}
+function hitList(group) {
+  return `<ul class="hits">${group.hits.map((h) => `<li><a href="${esc(editorLink(group.file, h.line))}">${h.line}</a><span>${inlineCode(esc(h.text))}</span></li>`).join("")}
+    ${group.count > group.hits.length ? `<li><span></span><span class="note">…and ${group.count - group.hits.length} more</span></li>` : ""}</ul>`;
+}
+function fileCard() {
+  const row = state.file && report.files.find((r) => r.path === state.file);
+  if (!row) return "";
+  const groups = report.automated.filter((g) => g.file === state.file);
+  const m = row.metrics;
+  return `<div class="card" style="margin-bottom:12px"><h2>${fileRef(row.path)}</h2>
+    <div class="sub">${row.lines} lines${m.functions ? ` · ${m.functions} functions · most complex: <code>${esc(m.most_complex)}</code> (${m.max_complexity}) · deepest nesting ${m.max_nesting}` : ""}</div>
+    ${groups.length ? `<details><summary>${plural(row.automated, "style & standards hit")} in this file</summary>${groups.map((g) => `
+      <div class="hit-file">${sevMark(g.severity, false)} ${esc(g.title)} (${g.count})</div>${hitList(g)}`).join("")}</details>`
+      : '<span class="note">No automated hits in this file.</span>'}</div>`;
+}
+function renderFindings() {
+  const all = report.findings, list = filteredFindings();
+  const counts = Object.fromEntries(SEVERITIES.map((s) => [s, all.filter((f) => matchesStatus(f) && f.severity === s).length]));
+  const categories = [...new Set(all.map((f) => f.category))].sort();
+  const option = (value, label, selected) => `<option value="${esc(value)}"${selected ? " selected" : ""}>${esc(label)}</option>`;
+  const allExpanded = list.length && list.every((f) => state.expanded.has(f.id));
+  $("view-findings").innerHTML = `
+    <div class="filters">
+      <input class="search" id="q" type="search" placeholder="Search id, title, file or text" value="${esc(state.q)}" aria-label="Search findings">
+      <div class="chips" role="group" aria-label="Severity">${SEVERITIES.map((s) => `
+        <button class="chip" data-sev="${s}" aria-pressed="${state.severities.has(s)}">${sevMark(s)}<span class="n">${counts[s]}</span></button>`).join("")}</div>
+    </div>
+    <div class="filters">
+      <select id="f-status" aria-label="Status">
+        ${[["open", "Open (incl. re-check)"], ["changed", "Needs a re-check"], ["done", "Fixed / resolved"], ["all", "Every status"]]
+          .map(([v, l]) => option(v, l, state.status === v)).join("")}</select>
+      <select id="f-area" aria-label="Area">${option("", "All areas", !state.area)}${Object.entries(AREA_NAMES).map(([k, n]) => option(k, n, state.area === k)).join("")}</select>
+      <select id="f-category" aria-label="Category">${option("", "All categories", !state.category)}${categories.map((c) => option(c, c, state.category === c)).join("")}</select>
+      <select id="f-source" aria-label="Evidence">${[["", "Any evidence"], ["probe", "Has a live probe"], ["lead", "Lead review"], ["reviewer", "Opus 5.5 reviewers"]]
+          .map(([v, l]) => option(v, l, state.source === v)).join("")}</select>
+      <select id="f-group" aria-label="Group by">${[["severity", "Group by severity"], ["area", "Group by area"], ["file", "Group by file"], ["category", "Group by category"]]
+          .map(([v, l]) => option(v, l, state.groupBy === v)).join("")}</select>
+      <label class="toggle"><input type="checkbox" id="f-wip"${state.hideWip ? " checked" : ""}> Hide known work-in-progress</label>
+      <label class="toggle"><input type="checkbox" id="f-hints"${state.revealHints ? " checked" : ""}> Reveal hints</label>
+    </div>
+    <div class="result-line"><span>${plural(list.length, "finding")} shown</span>
+      ${state.file ? `<span>in <code>${esc(state.file)}</code></span><button class="link-btn" id="clear-file">show all files</button>` : ""}
+      <button class="link-btn" id="expand-all">${allExpanded ? "Collapse all" : "Expand all"}</button>
+      <button class="link-btn" id="reset-filters">Reset filters</button></div>
+    ${fileCard()}
+    ${list.length ? groupFindings(list).map(([key, items]) => `
+      <div class="group-title${state.groupBy === "file" ? " plain" : ""}">${state.groupBy === "severity" ? sevMark(key) : esc(key)}<span class="n">${items.length}</span></div>
+      ${items.map(findingCard).join("")}`).join("") : '<div class="empty">No findings match these filters.</div>'}`;
+}
+
+// ---------- files ----------
+function renderFiles() {
+  const rows = report.files.filter((r) => r.kind !== "other" || r.weight || r.automated);
+  const key = state.sort.key, dir = state.sort.dir;
+  const value = (r) => key === "path" ? r.path : key === "lines" ? r.lines : key === "automated" ? r.automated :
+    key === "complexity" ? (r.metrics.max_complexity || 0) : r.weight;
+  rows.sort((a, b) => (value(a) > value(b) ? 1 : value(a) < value(b) ? -1 : 0) * dir || a.path.localeCompare(b.path));
+  const maxWeight = Math.max(1, ...rows.map((r) => r.weight));
+  const th = (k, label, cls = "") => `<th class="${cls}"><button data-sort="${k}">${label}${key === k ? (dir < 0 ? " ↓" : " ↑") : ""}</button></th>`;
+  $("view-files").innerHTML = `
+    <div class="result-line"><span>${rows.length} files with code or findings. Click a file name to see everything about it; click a column to sort.</span></div>
+    <div class="table-wrap"><table>
+      <thead><tr>${th("path", "File")}${th("weight", "Open findings (weighted)")}${SEVERITIES.slice(0, 4).map((s) => `<th class="num">${sevMark(s)}</th>`).join("")}
+        ${th("automated", "Style hits", "num")}${th("lines", "Lines", "num")}${th("complexity", "Max complexity", "num")}<th class="num">Nesting</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr>
+        <td><button class="link-btn path" data-file="${esc(r.path)}">${esc(r.path)}</button></td>
+        <td><span class="cell-bar track"><i style="width:${r.weight ? Math.max(3, Math.round(100 * r.weight / maxWeight)) : 0}%;${r.weight ? "" : "min-width:0"}"></i></span>${r.weight || ""}</td>
+        ${SEVERITIES.slice(0, 4).map((s) => `<td class="num">${r.open[s] || ""}</td>`).join("")}
+        <td class="num">${r.automated || ""}</td><td class="num">${r.lines}</td>
+        <td class="num" title="${esc(r.metrics.most_complex || "")}">${r.metrics.max_complexity || ""}</td><td class="num">${r.metrics.max_nesting || ""}</td>
+      </tr>`).join("")}</tbody></table></div>`;
+}
+
+// ---------- automated ----------
+function renderAutomated() {
+  const groups = report.automated.filter((g) => state.includeTests || !g.file.startsWith("tests/"));
+  const byRule = new Map();
+  for (const g of groups) { if (!byRule.has(g.rule)) byRule.set(g.rule, []); byRule.get(g.rule).push(g); }
+  const rules = [...byRule.entries()].map(([rule, list]) => ({ rule, list, info: report.rules[rule], total: list.reduce((n, g) => n + g.count, 0) }))
+    .sort((a, b) => SEVERITIES.indexOf(a.info.severity) - SEVERITIES.indexOf(b.info.severity) || b.total - a.total);
+  const total = rules.reduce((n, r) => n + r.total, 0);
+  $("view-automated").innerHTML = `
+    <div class="result-line"><span>${total.toLocaleString()} hits from ${rules.length} checks, recomputed from the code on every build.
+      Baseline: PEP 8 as <code>ament_flake8</code> enforces it (99 columns) and PEP 257 - both already declared in package.xml.</span>
+      <label class="toggle"><input type="checkbox" id="a-tests"${state.includeTests ? " checked" : ""}> Include tests/</label></div>
+    ${rules.map((r) => `<details class="rule"><summary>
+        <span>${sevMark(r.info.severity)}</span><span><b>${esc(r.info.title)}</b> <span class="tag">${esc(r.info.category)}</span></span>
+        <span class="note">${r.total.toLocaleString()} in ${plural(r.list.length, "file")}</span></summary>
+      <div class="body"><p class="why">${inlineCode(esc(r.info.why))}</p>
+        ${[...r.list].sort((a, b) => b.count - a.count).map((g) => `<div class="hit-file">${fileRef(g.file)} <span class="note">(${g.count})</span></div>${hitList(g)}`).join("")}
+      </div></details>`).join("") || '<div class="empty">No automated hits.</div>'}`;
+}
+
+// ---------- tests ----------
+function renderTests() {
+  const t = report.tests;
+  const rows = t.suites.map((s) => {
+    const ran = s.exit !== null;
+    const verdict = !ran ? '<span class="note">not run</span>' : s.exit === 0 ? `<span class="badge fixed">${ICONS.check}pass</span>` : '<span class="badge changed">fail</span>';
+    return `<tr><td class="path">${esc(s.suite)}</td><td>${verdict}</td><td class="num">${ran ? `${s.passed}/${s.total}` : ""}</td>
+      <td class="num">${ran ? s.seconds + " s" : ""}</td><td>${s.in_ci ? "yes" : '<span class="tag">not in CI</span>'}</td>
+      <td style="white-space:normal;max-width:520px" class="note">${(s.failing_lines || []).slice(0, 3).map(esc).join("<br>")}</td></tr>`;
+  }).join("");
+  $("view-tests").innerHTML = `
+    <div class="result-line">
+      <span>${t.ran_at ? `Last run ${ago(t.ran_at)} (${t.seconds} s)${t.stale ? " - <b>the code has changed since</b>" : ""}.` : "The suites have not been run by this tool yet."}</span>
+      ${report.meta.live ? '<button class="ghost" id="run-tests">Run all test suites</button>' : "<span>Run <code>python code_review/review.py tests</code> to refresh.</span>"}
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>Suite</th><th>Result</th><th class="num">Cases</th><th class="num">Time</th><th>In CI</th><th>First failing lines</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <p class="note" style="margin-top:12px">A passing row means the suite's own checks passed. Several findings in the "Test suites" area describe checks
+      that cannot fail, so read a green row together with those.</p>`;
+}
+
+// ---------- about ----------
+function renderAbout() {
+  const m = report.meta;
+  const count = (source) => report.findings.filter((f) => f.source === source).length;
+  $("view-about").innerHTML = `<div class="about">
+    <div class="card"><h2>What the statuses mean</h2><div class="sub">How a finding stops being open.</div><dl>
+      <dt>${STATUS_LABEL.open}</dt><dd>The defect is still there: its probe reproduces it, or the reviewed code is unchanged.</dd>
+      <dt>${STATUS_LABEL.fixed}</dt><dd>The finding's probe ran against your current code and the bug no longer happens.</dd>
+      <dt>${STATUS_LABEL.likely_fixed}</dt><dd>A text pattern that marked the defect is gone, or the missing piece appeared. Worth a glance to confirm.</dd>
+      <dt>${STATUS_LABEL.changed}</dt><dd>No probe covers it, and the code under the finding was edited or removed since the review. Check whether your change fixed it, then mark it resolved.</dd>
+      <dt>${STATUS_LABEL.resolved}</dt><dd>Your decision, stored in <code>code_review/state/triage.json</code> (as are Acknowledged and Won't fix).</dd></dl></div>
+    <div class="card"><h2>Keeping it live</h2><div class="sub">The report is generated from the repository on every build.</div>
+      <pre>python code_review/review.py serve     # this page, updating as you save
+python code_review/review.py           # rebuild code_review/out/report.html
+python code_review/review.py tests     # run every suite, then rebuild
+python code_review/review.py check     # exit 1 while critical findings remain</pre>
+      <p class="note" style="margin-top:10px">Findings live in <code>code_review/findings/*.toml</code> and point at code by a snippet of the line,
+      so line numbers follow your edits. Probes live in <code>code_review/probes/</code>; each re-runs only when a file it depends on changes.</p></div>
+    <div class="card"><h2>Where the findings came from</h2><div class="sub">${report.summary.curated_total} reviewed findings.</div><dl>
+      <dt>Lead review</dt><dd>${count("lead")} findings written by Claude after reading every source file; ${m.probe_stats.probes} have a reproduction probe.</dd>
+      <dt>Reviewers</dt><dd>${count("reviewer")} findings from seven Opus 5.5 review passes (four over the tests, three independent second opinions on the source and dashboard), de-duplicated against the lead's. Their throwaway scripts are archived in <code>code_review/evidence/</code>.</dd>
+      <dt>Automated</dt><dd>${report.summary.automated_hits.toLocaleString()} style, naming, nesting and dead-code hits computed from the syntax tree - uncurated, always current.</dd></dl></div>
+    <div class="card"><h2>This build</h2><div class="sub">Generated ${esc(new Date(m.generated_at).toLocaleString())}.</div><dl>
+      <dt>Commit</dt><dd><code>${esc(m.git.branch)}@${esc(m.git.commit)}</code> ${esc(m.git.subject)}</dd>
+      <dt>Uncommitted</dt><dd>${m.git.dirty.length ? m.git.dirty.map((p) => `<code>${esc(p)}</code>`).join(" ") : "none"}</dd>
+      <dt>Probes</dt><dd>${m.probe_stats.probes} probes in ${m.probe_stats.files} files; ${m.probe_stats.rerun} file(s) re-run this build (${m.probe_stats.seconds} s)</dd>
+      <dt>Build</dt><dd>${m.build_seconds} s on Python ${esc(m.python)}</dd></dl></div></div>`;
+}
+
+// ---------- chrome ----------
+function renderChrome() {
+  const m = report.meta, pill = $("live-pill");
+  pill.className = "pill" + (m.live ? " live" : "");
+  $("live-text").textContent = m.live ? "live" : "snapshot";
+  pill.title = m.live ? "Connected: rebuilds when you save a file" : "Static snapshot. Run: python code_review/review.py serve";
+  $("meta-line").textContent = `${m.git.branch || "?"}@${m.git.commit || "?"}${m.git.dirty.length ? ` + ${m.git.dirty.length} uncommitted` : ""} · built ${ago(m.generated_at)}`;
+  $("rebuild-btn").hidden = !m.live;
+  $("tab-findings").textContent = report.summary.open;
+  $("tab-files").textContent = report.summary.files;
+  $("tab-automated").textContent = report.summary.automated_hits.toLocaleString();
+  $("tab-tests").textContent = report.tests.ran_at ? `${report.tests.suites.filter((s) => s.exit === 0).length}/${report.tests.suites.length}` : "";
+  $("footer").innerHTML = `Generated by <code>code_review/review.py</code> v${esc(m.tool_version)} from ${plural(report.summary.files, "file")}, ${report.summary.lines.toLocaleString()} lines.
+    ${m.live ? "" : "This is a static snapshot - run <code>python code_review/review.py serve</code> for the live view."}`;
+}
+function renderView() {
+  document.querySelectorAll(".tab").forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.view === state.view)));
+  document.querySelectorAll(".view").forEach((view) => { view.hidden = view.id !== `view-${state.view}`; });
+  ({ findings: renderFindings, files: renderFiles, automated: renderAutomated, tests: renderTests, about: renderAbout })[state.view]();
+}
+function renderAll() { renderChrome(); renderOverview(); wireSparkline(); renderView(); }
+function showView(view) { state.view = view; persist(); renderView(); }
+function resetFilters(overrides = {}) {
+  Object.assign(state, { q: "", category: "", area: "", source: "", file: "", hideWip: false, status: "open" }, overrides);
+  state.severities.clear();
+}
+function scrollToViews() { document.querySelector(".tabs").scrollIntoView({ block: "start" }); }
+function openFinding(id) {
+  const finding = report.findings.find((f) => f.id === id);
+  if (!finding) return;
+  resetFilters({ status: isOpen(finding) ? "open" : "all" });
+  state.expanded.add(id);
+  showView("findings");
+  requestAnimationFrame(() => document.getElementById(`f-${id}`)?.scrollIntoView({ block: "center" }));
+}
+function toast(title, lines) {
+  const box = $("toast");
+  box.innerHTML = `<b>${esc(title)}</b>${lines.map(esc).join("<br>")}`;
+  box.hidden = false;
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => { box.hidden = true; }, 9000);
+}
+
+// ---------- events ----------
+document.addEventListener("click", (event) => {
+  const el = event.target.closest("button");
+  if (!el) return;
+  const d = el.dataset;
+  if (el.classList.contains("tab")) return showView(d.view);
+  if (d.toggle) { state.expanded.has(d.toggle) ? state.expanded.delete(d.toggle) : state.expanded.add(d.toggle); return renderFindings(); }
+  if (d.open) return openFinding(d.open);
+  if (d.goto) { showView(d.goto); return scrollToViews(); }
+  if (d.area) { resetFilters({ area: d.area }); showView("findings"); return scrollToViews(); }
+  if (d.file) { resetFilters({ file: d.file, status: "all" }); showView("findings"); return scrollToViews(); }
+  if (el.classList.contains("tile")) {
+    resetFilters({ status: d.status }); if (d.sev) state.severities.add(d.sev);
+    persist(); showView("findings"); return scrollToViews();
+  }
+  if (el.classList.contains("chip")) { state.severities.has(d.sev) ? state.severities.delete(d.sev) : state.severities.add(d.sev); return renderFindings(); }
+  if (d.sort) { state.sort = { key: d.sort, dir: state.sort.key === d.sort ? -state.sort.dir : (d.sort === "path" ? 1 : -1) }; return renderFiles(); }
+  if (d.triage) return triage(el.closest(".triage"), d.triage);
+  if (el.id === "clear-file") { state.file = ""; return renderFindings(); }
+  if (el.id === "reset-filters") { resetFilters(); return renderFindings(); }
+  if (el.id === "expand-all") {
+    const list = filteredFindings(), allOpen = list.every((f) => state.expanded.has(f.id));
+    list.forEach((f) => (allOpen ? state.expanded.delete(f.id) : state.expanded.add(f.id))); return renderFindings();
+  }
+  if (el.id === "theme-btn") {
+    const root = document.documentElement;
+    const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    root.dataset.theme = dark ? "light" : "dark"; return persist();
+  }
+  if (el.id === "rebuild-btn") return post("/api/rebuild", { force_probes: true });
+  if (el.id === "run-tests") { el.disabled = true; el.textContent = "Running… (about a minute)"; return post("/api/tests", {}); }
+});
+document.addEventListener("input", (event) => {
+  if (event.target.id !== "q") return;
+  state.q = event.target.value;
+  const at = event.target.selectionStart;
+  renderFindings();
+  const box = $("q"); box.focus(); box.setSelectionRange(at, at);
+});
+document.addEventListener("change", (event) => {
+  const el = event.target;
+  const selects = { "f-status": "status", "f-area": "area", "f-category": "category", "f-source": "source", "f-group": "groupBy" };
+  if (selects[el.id]) { state[selects[el.id]] = el.value; persist(); return renderFindings(); }
+  if (el.id === "f-wip") { state.hideWip = el.checked; return renderFindings(); }
+  if (el.id === "f-hints") { state.revealHints = el.checked; persist(); return renderFindings(); }
+  if (el.id === "a-tests") { state.includeTests = el.checked; return renderAutomated(); }
+});
+
+// ---------- live ----------
+async function post(path, body) {
+  try {
+    const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Navi-Review": "1" }, body: JSON.stringify(body) });
+    if (!response.ok) toast("Request refused", [`${path} returned ${response.status}`]);
+  } catch (error) { toast("Could not reach the review server", [String(error)]); }
+}
+function triage(box, status) {
+  if (box) post("/api/triage", { id: box.dataset.id, status, note: box.querySelector("input").value });
+}
+function describeChanges(before, after) {
+  const old = new Map(before.findings.map((f) => [f.id, f.status]));
+  const fixed = [], reopened = [], recheck = [];
+  for (const f of after.findings) {
+    const was = old.get(f.id);
+    if (!was || was === f.status) continue;
+    if (!OPEN.has(f.status) && OPEN.has(was)) fixed.push(f.id);
+    else if (OPEN.has(f.status) && !OPEN.has(was)) reopened.push(f.id);
+    else if (f.status === "changed") recheck.push(f.id);
+  }
+  const lines = [];
+  if (fixed.length) lines.push(`Fixed: ${fixed.join(", ")}`);
+  if (reopened.length) lines.push(`Open again: ${reopened.join(", ")}`);
+  if (recheck.length) lines.push(`Needs a re-check: ${recheck.join(", ")}`);
+  const delta = after.summary.automated_hits - before.summary.automated_hits;
+  if (delta) lines.push(`Style & standards: ${delta > 0 ? "+" : ""}${delta} hits`);
+  return { lines, touched: [...fixed, ...reopened, ...recheck] };
+}
+async function refresh(reason) {
+  const response = await fetch("/api/report", { cache: "no-store" });
+  const next = await response.json();
+  const changes = describeChanges(report, next);
+  report = next;
+  const scroll = window.scrollY;
+  if (changes.lines.length) state.recent.unshift(...changes.lines.map((line) => `${new Date().toLocaleTimeString()} - ${line}`));
+  renderAll();
+  window.scrollTo(0, scroll);
+  changes.touched.forEach((id) => document.getElementById(`f-${id}`)?.querySelector(".row")?.classList.add("flash"));
+  if (changes.lines.length) toast(`Report updated - ${reason}`, changes.lines);
+}
+function connect() {
+  const events = new EventSource("/api/events");
+  const pill = $("live-pill"), text = $("live-text");
+  events.onmessage = (message) => {
+    const event = JSON.parse(message.data);
+    if (event.type === "building") { pill.className = "pill busy"; text.textContent = "rebuilding…"; }
+    else if (event.type === "tests-started") { pill.className = "pill busy"; text.textContent = "running tests…"; }
+    else if (event.type === "updated") refresh(event.reason).catch((error) => toast("Could not load the new report", [String(error)]));
+    else if (event.type === "failed") { renderChrome(); toast("Rebuild failed - showing the previous report", [event.message]); }
+  };
+  events.onerror = () => { pill.className = "pill"; text.textContent = "disconnected - retrying"; };
+  events.onopen = () => { if (text.textContent.startsWith("disconnected")) refresh("reconnected").catch(() => {}); };
+}
+
+function openLinkedFinding() {
+  const linked = decodeURIComponent(location.hash.slice(1));
+  if (linked && report.findings.some((f) => f.id === linked)) openFinding(linked);
+}
+if (stored.theme) document.documentElement.dataset.theme = stored.theme;
+renderAll();
+openLinkedFinding();
+window.addEventListener("hashchange", openLinkedFinding);
+if (report.meta.live && location.protocol.startsWith("http")) connect();
+setInterval(renderChrome, 30000);
+})();
+</script>
+</body>
+</html>

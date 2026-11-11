@@ -1,0 +1,411 @@
+# Utilities and the ROS mock
+#
+# Curated code-review findings. One [[finding]] per defect.
+# `anchor` is a literal piece of the offending line; the report re-locates it on
+# every build, so line numbers never go stale. See code_review/README.md for the
+# field reference and how findings are marked fixed.
+
+[[finding]]
+id = "MK-101"
+title = "Mock diverges from rclpy in ways the node code depends on (timers, delivery, types, params, shapes)"
+severity = "high"
+category = "tests"
+file = "navi_bot/mock_ros2.py"
+anchor = "class MockTimer:"
+symbol = "MockTimer"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+also_reported = 1
+reviewed_line = 138
+what = '''
+Verified differences: (1) mock timers never fire (real: 10 firings of a 0.05 s timer in 0.5 s) -
+hides the periodic-dwell-timer bug in state_machine; (2) mock publish delivers synchronously
+inside publish() (real: [] until spun) - SM->planner->controller chains run re-entrantly in
+tests; (3) mock publish accepts any type (real: TypeError 'Expected Twist, got String'); (4)
+get_parameter on an undeclared name returns a value object whose double_value raises TypeError
+(real: ParameterNotDeclaredException); (5) mock OccupancyGrid has flat width/height/resolution
+and accepts those kwargs, real has only .info and rejects the kwargs -
+LidarProcessor.update_costmap and tests/lidar_mock_test.py rely on the flat shape; (6) mock
+Pose2D() rejects kwargs that real accepts; (7) mock LaserScan defaults angle_increment 0.1 (real
+0.0); (8) QoS ignored: no latching (a late /map subscriber gets nothing on the mock, gets the
+map on real), no depth; (9) destroy_node does not unregister callbacks from the global bus; (10)
+spin() sleeps forever without running timers, so running any node under the mock silently does
+nothing.
+'''
+why = '''
+Tests pass against behaviour that real ROS does not have (and vice-versa), so the suite cannot
+catch integration bugs like the stale dwell flags or the shutdown crash.
+'''
+evidence = '''
+python code_review/evidence/reviewer-scripts/src_nodes/real_vs_mock.py under both backends.
+Mock: 'OccupancyGrid().width: OK -> 100', 'get_parameter(undeclared): TypeError',
+'publish(String) on a Twist publisher: OK', 'timer(0.05 s) fired ... 0', 'delivered
+synchronously inside publish(): ['hello']'. Real: 'AttributeError ... no attribute 'width'',
+'ParameterNotDeclaredException', 'TypeError: Expected <class geometry_msgs...Twist>', 'timer ...
+fired ... 10', 'delivered synchronously ...: []', 'LidarProcessor.update_costmap(real-shaped
+OccupancyGrid()): AttributeError ... 'height''.
+'''
+hint = '''
+Give the mock an explicit executor (spin_once that fires due timers and drains a queue),
+type-check publish, raise on undeclared params, shape OccupancyGrid like the real msg (.info
+only), and unregister on destroy_node.
+'''
+
+[[finding]]
+id = "GE-001"
+title = "normalize_angle() loops once per turn: slow for large angles, infinite for inf"
+severity = "medium"
+category = "robustness"
+file = "navi_bot/utils/geometry.py"
+anchor = "while angle > np.pi:"
+symbol = "normalize_angle"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+The angle is brought into range by subtracting 2*pi in a loop.
+'''
+why = '''
+Cost is proportional to the angle's size, and float('inf') - one corrupt sensor value reaching a
+heading - never terminates, hanging whichever callback called it (the DWA scoring loop and the
+motion controller both do). motion_controller.py carries a second copy of the same loop.
+'''
+hint = '''
+There are closed-form ways to wrap an angle that take the same time for any input.
+'''
+
+[[finding]]
+id = "MK-003"
+title = "The mock OccupancyGrid has a different shape from the real message"
+severity = "medium"
+category = "tests"
+file = "navi_bot/mock_ros2.py"
+anchor = "class OccupancyGrid:"
+symbol = "OccupancyGrid"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+The mock exposes width, height and resolution directly on the message; nav_msgs/OccupancyGrid
+has them under .info, with the origin pose.
+'''
+why = '''
+Code tested against the mock does not run against ROS (LD-004), and the nodes carry `if
+hasattr(msg, 'info')` branches whose real-ROS side no test executes. map_publisher even bolts a
+SimpleNamespace .info onto the mock to compensate.
+'''
+hint = '''
+A mock is only useful where it is indistinguishable from the real thing at the boundary the code
+touches.
+'''
+
+[[finding]]
+id = "PR-001"
+title = "The profiler's deadline miss rate can exceed 100%"
+severity = "medium"
+category = "bug"
+file = "navi_bot/utils/profiler.py"
+anchor = "stats['deadline_miss_rate'] = misses / len(times)"
+symbol = "PerformanceProfiler.get_statistics"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+The miss counter is a lifetime total; the divisor is the length of the history deque, which is
+capped at history_size.
+'''
+why = '''
+After more than history_size samples the rate is inflated - 400% in the probe - so the one
+number meant to summarise real-time health is wrong for any long run.
+'''
+hint = '''
+Numerator and denominator must count the same set of samples.
+'''
+
+[[finding]]
+id = "WS-002"
+title = "WebSocket broadcast cannot work on Python 3.11+ (work in progress)"
+severity = "medium"
+category = "bug"
+file = "navi_bot/utils/websocket.py"
+anchor = "await asyncio.wait([client.send(message) for client in self.clients])"
+symbol = "WebSocketServer.broadcast"
+source = "lead"
+confidence = "reproduced"
+known_wip = true
+also_reported = 2
+what = '''
+asyncio.wait() has rejected bare coroutines since Python 3.11; the project runs on 3.12 and
+3.14. The handler(websocket, path) signature is also the legacy one that current releases of the
+websockets library no longer call, and the library is not declared as a dependency (PK-001).
+'''
+why = '''
+The telemetry server cannot send a single frame. The dashboard's Live tab therefore has nothing
+to connect to. Known and parked.
+'''
+hint = '''
+Read the asyncio.wait and websockets changelogs for the versions you are running.
+'''
+
+[[finding]]
+id = "GE-002"
+title = "interpolate_path() can leave gaps of nearly twice the requested spacing"
+severity = "low"
+category = "bug"
+file = "navi_bot/utils/geometry.py"
+anchor = "num_points = int(dist / resolution)"
+symbol = "interpolate_path"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+The number of sub-segments is int(dist / resolution), which rounds down.
+'''
+why = '''
+A 0.19 m segment at 0.1 m resolution is returned as a single 0.19 m step. Callers that rely on
+the spacing (collision checks along a path) are sampling more coarsely than they asked for.
+'''
+hint = '''
+Which rounding direction guarantees spacing no larger than the resolution?
+'''
+
+[[finding]]
+id = "GE-101"
+title = "Typos in source docstrings across the reviewed modules"
+severity = "low"
+category = "docs"
+file = "navi_bot/utils/geometry.py"
+anchor = "Transforma a point from one frame to another."
+symbol = "transform_point"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+also_reported = 1
+reviewed_line = 15
+what = '''
+geometry.py L15 'Transforma', L64 'Euclidian', L136 'Ture'; profiler.py L3 'Perforamnce';
+imu_processor.py L5 'Processess', L39 'estamation', L111 'acceleromteter', L133 'True is motion
+detected'.
+'''
+why = '''
+Cosmetic.
+'''
+evidence = '''
+Reading the files.
+'''
+hint = '''
+Fix the spellings.
+'''
+
+[[finding]]
+id = "GE-102"
+title = "point_in_polygon: asymmetric edge handling, empty polygon crash, confusing conditional xinters, typos"
+severity = "low"
+category = "robustness"
+file = "navi_bot/utils/geometry.py"
+anchor = "xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x"
+symbol = "point_in_polygon"
+source = "reviewer"
+confidence = "reproduced"
+also_reported = 1
+reviewed_line = 149
+what = '''
+Boundary points are inside on the right/top edges and outside on the left/bottom ((2,1) True,
+(0,1) False on the unit square); the docstring does not say this. An empty polygon raises
+IndexError. xinters is only assigned conditionally; it cannot actually be stale (horizontal
+edges fail the y-range test), but that is non-obvious. Docstring typos: "Ture", "Transforma",
+"Euclidian".
+'''
+why = '''
+Surprising results for collision checks on edges.
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+code_review/evidence/reviewer-scripts/src_planners/geo_pf_probe.py -> square: (0,1) False, (2,1)
+True, (1,0) False, (1,2) True; "empty polygon -> IndexError('list index out of range')".
+'''
+hint = '''
+Document the half-open convention, guard n < 3, restructure the xinters branch.
+'''
+
+[[finding]]
+id = "GE-103"
+title = "Exact cell-border coordinates floor into the previous cell because of floating-point division"
+severity = "low"
+category = "robustness"
+file = "navi_bot/utils/geometry.py"
+anchor = "col = int(np.floor((x - origin[0]) / resolution))"
+symbol = "world_to_grid"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 172
+what = '''
+0.15/0.05 evaluates to 2.9999999999999996, so x = 0.15 m maps to col 2, not 3. 98 of the first
+2000 exact multiples k*0.05 map to k-1. The mission stations happen to be unaffected.
+'''
+why = '''
+Goals typed on round numbers can land one cell off (into an occupied neighbour, for example).
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+code_review/evidence/reviewer-scripts/src_planners/geo_pf_probe.py -> "x=0.15: col=2 expected
+floor=3", "exact cell-border values k*0.05 mapping to k-1: 98 of 2000".
+'''
+hint = '''
+Add a small epsilon before floor (or round to ~1e-9 first); validate resolution > 0.
+'''
+
+[[finding]]
+id = "GE-104"
+title = "interpolate_path: resolution 0 raises OverflowError, negative silently disables interpolation, short input aliased"
+severity = "low"
+category = "robustness"
+file = "navi_bot/utils/geometry.py"
+anchor = "num_points = int(dist / resolution)"
+symbol = "interpolate_path"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 209
+what = '''
+resolution 0 divides by zero (numpy warning, then int(inf) raises OverflowError); negative
+resolution returns the waypoints unchanged; fewer than 2 waypoints returns the caller's own list
+object.
+'''
+why = '''
+Unvalidated parameters fail late or silently; aliasing lets callers mutate the input through the
+result.
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+code_review/evidence/reviewer-scripts/src_planners/geo_pf_probe.py -> "resolution 0 ->
+OverflowError('cannot convert float infinity to integer')", "resolution -0.1 -> [(0, 0), (1,
+0)]", "single wp returns same object: True".
+'''
+hint = '''
+Validate resolution > 0 and return list(waypoints).
+'''
+
+[[finding]]
+id = "MK-001"
+title = "Destroying a mock node leaves its subscriptions live on the global bus"
+severity = "low"
+category = "tests"
+file = "navi_bot/mock_ros2.py"
+anchor = "def destroy_node(self):"
+symbol = "Node.destroy_node"
+source = "lead"
+confidence = "reproduced"
+what = '''
+destroy_node() only logs. Callbacks stay in the module-level _topic_subscribers registry until
+init() is called.
+'''
+why = '''
+Nodes from one test keep reacting to messages published by the next unless every test remembers
+to call init() - a source of order-dependent test behaviour.
+'''
+hint = '''
+destroy_node() should undo what create_subscription() did.
+'''
+
+[[finding]]
+id = "MK-002"
+title = "The mock logger lacks debug() and fatal()"
+severity = "low"
+category = "tests"
+file = "navi_bot/mock_ros2.py"
+anchor = "class MockLogger:"
+symbol = "MockLogger"
+source = "lead"
+confidence = "reproduced"
+what = '''
+rclpy's logger provides debug, info, warning, error and fatal. The mock has info, warning/warn
+and error.
+'''
+why = '''
+The first get_logger().debug(...) added to a node works on the robot and raises AttributeError
+in every test (the reverse of the .warn() problem already hit once).
+'''
+hint = '''
+Mirror the real interface completely, even for methods nobody calls yet.
+'''
+
+[[finding]]
+id = "PR-002"
+title = "@profile loses timings when the function raises, and hides the function's name"
+severity = "low"
+category = "robustness"
+file = "navi_bot/utils/profiler.py"
+anchor = "def wrapper(*args, **kwargs):"
+symbol = "profile"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+The decorator starts a timer, calls the function and stops the timer with no try/finally, and
+does not use functools.wraps.
+'''
+why = '''
+A call that raises records nothing and leaves a stale entry in active_timers; decorated
+functions all report __name__ == 'wrapper' in tracebacks and logs. (The Timer context manager in
+the same file handles exceptions correctly.) Nothing in the nodes uses the profiler:
+robot_controller and path_planner time their loops by hand.
+'''
+hint = '''
+See how the Timer class just above guarantees stop_timing() runs.
+'''
+
+[[finding]]
+id = "PR-101"
+title = "Only the first deadline is stored, yet each call is judged against its own deadline"
+severity = "low"
+category = "logic"
+file = "navi_bot/utils/profiler.py"
+anchor = "self.deadlines[task_name] = [deadline, 0]"
+symbol = "PerformanceProfiler.stop_timing"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 56
+what = '''
+deadlines[task] is created once with the first deadline value, but L58 compares against whatever
+deadline is passed now. get_statistics reports the first one. profiler_test tests 5 and 8 pass
+deadline=0.0 then 10.0, so stats['deadline'] is 0.0 while the second call was judged against
+10.0. The tests never assert stats['deadline'].
+'''
+why = '''
+Reported deadline and miss accounting can disagree.
+'''
+evidence = '''
+python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_sensors/prof_probe.py:
+'reported deadline after 0.0 then 10.0: 0.0'.
+'''
+hint = '''
+Fix the deadline per task (register it once and use the stored value), or store the latest.
+Assert stats['deadline'] in test 8.
+'''
+
+[[finding]]
+id = "RS-101"
+title = "ros_compat silently falls back to the mock when rclpy exists but fails to import"
+severity = "low"
+category = "robustness"
+file = "navi_bot/ros_compat.py"
+anchor = "except ImportError:"
+source = "reviewer"
+confidence = "likely"
+reviewed_line = 28
+what = '''
+Any ImportError from 'import rclpy' (incl. a broken install whose native extension fails to
+load) selects the mock with no warning. Under the mock, spin() sleeps forever without firing
+timers, so a launched node appears to run but does nothing.
+'''
+why = '''
+A misconfigured ROS env looks like a working but idle node.
+'''
+evidence = '''
+Reading ros_compat.py:25-29 and mock_ros2.spin; real_vs_mock.py shows mock timers never fire.
+'''
+hint = '''
+Only fall back on ModuleNotFoundError for 'rclpy' itself, and log which backend is active.
+'''

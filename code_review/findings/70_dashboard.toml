@@ -1,0 +1,1387 @@
+# Telemetry dashboard (Electron)
+#
+# Curated code-review findings. One [[finding]] per defect.
+# `anchor` is a literal piece of the offending line; the report re-locates it on
+# every build, so line numbers never go stale. See code_review/README.md for the
+# field reference and how findings are marked fixed.
+
+[[finding]]
+id = "DB-109"
+title = "Case verdicts come from free-text regex; last match wins, so later chatter flips FAIL to PASS"
+severity = "high"
+category = "logic"
+file = "telemetry_dashboard/index.html"
+anchor = "else if (cur) { cur.lines.push(l); if (isPass(l.text)) cur.passed=true; if (isFail(l.text)) cur.passed=false; }"
+symbol = "groupIntoCases"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 828
+what = '''
+groupIntoCases (L824-831) sets a case's verdict from EVERY line after the header that matches
+isPass/isFail (L821-822), and the last match wins. isPass/isFail are \bpass(ed)?\b /
+\bfail(ed)?\b over arbitrary log text, and isSuiteSummary (L820) throws away ANY line containing
+a 'n/m' ratio. Lines that go wrong: 'Robot passed waypoint 2 while recovering' after a 'FAIL:
+collided' line flips the case to PASS; 'FAIL: only 2/3 waypoints reached' and 'PASS: visited 3/3
+waypoints' give no verdict because of the ratio; 'Retries: 0 failed attempts' and 'Engaging
+fail-safe stop' count as FAIL; 'Robot will pass the obstacle' and '/data/pass/warehouse.pgm'
+count as PASS; 'FAIL: robot did not pass the waypoint' and 'PASS: no planner call failed' give
+no verdict because both words appear; a crash traceback gives no verdict. classForLine
+(L811-817) shares the problem. The real header 'TEST 19: Planning — path must not pass through
+occupied cells' (path_planner_test) is coloured green as a PASS line, and in appendLine
+(L1239/L1257) it is treated as a verdict line, which calls showCase early.
+'''
+why = '''
+The per-case pass/fail dots and the passed/failed counts are the Tests tab's core output. One
+later log line containing 'pass' turns a failed case green. The suite badge partly hides this:
+computeSuiteBadge still says 'fail' when the exit code is non-zero, but the case rows and the 'n
+passed' summary are wrong.
+'''
+evidence = '''
+node adversarial.js (functions taken from index.html L476-598, L804-831): 'FAIL then later
+chatter: [ true ]'; '"FAIL: only 2/3 waypoints reached" isPass false isFail false'; '"Retries: 0
+failed attempts" isFail true'; '"Engaging fail-safe stop" isFail true'; '"Loading map from
+/data/pass/warehouse.pgm" isPass true'; '"TEST 19: Planning — path must not pass through
+occupied cells" isPass true cls level-pass'; 'crash traceback no verdict: [ null ]'. Control:
+node verdicts.js over all 21 real suite logs matches every 'Results: n/m passed' line, so
+today's log wording happens to parse correctly.
+'''
+hint = '''
+Have the Python runner print one machine-readable verdict per case (for example '##RESULT 7
+PASS') and parse only that line. Fall back to the exit code when no verdict appears. Do not
+infer verdicts from prose.
+'''
+
+[[finding]]
+id = "DB-119"
+title = "Live tab consumes frame types that nothing in the repo produces; README calls it 'Functional'"
+severity = "high"
+category = "docs"
+file = "telemetry_dashboard/index.html"
+anchor = "switch(f.type) {"
+symbol = "connectWS"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 1438
+what = '''
+The Live tab handles map_init/explored/path/pose/obstacle/replan/status/log frames (L1438-1467).
+The repo's only WebSocket code, navi_bot/utils/websocket.py, is a 24-line relay that
+re-broadcasts whatever clients send. No node, planner or test publishes these frame types. The
+frame schema is not written down anywhere except in this switch. README L20 advertises 'a live
+WebSocket feed of robot pose and map', and its status table says 'Telemetry dashboard |
+Functional (live feed, demo, test runner)' while the WebSocket server is listed as 'In
+progress'.
+'''
+why = '''
+One of the dashboard's three tabs cannot show anything with this codebase, and the README says
+otherwise. Anyone reading it, a recruiter for example, would assume live telemetry works.
+'''
+evidence = '''
+grep -rn "map_init|'explored'|\"type\"" navi_bot found no producers. websocket.py L9-16 only
+relays. README.md L20 and L166.
+'''
+hint = '''
+Change the README status to 'Live tab: UI only, no publisher yet'. When the server is built,
+define the frame schema in one place (a Python dataclass or JSON schema) shared by the publisher
+and this tab.
+'''
+
+[[finding]]
+id = "DB-101"
+title = "Secondary text fails WCAG contrast (2.2-2.7:1) and is set at 9-10 px"
+severity = "medium"
+category = "standards"
+file = "telemetry_dashboard/index.html"
+anchor = "--text-0:#e8e6df; --text-1:#9a9890; --text-2:#5a5852;"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 12
+what = '''
+--text-2 #5a5852 is used for every label, panel title, timestamp, hint, badge and empty-state
+text. Its contrast is 2.72 on bg-0, 2.59 on bg-1, 2.45 on bg-2 and 2.24 on bg-3, below WCAG AA's
+4.5:1 (and below 3:1 even for large text). Much of that text is 9 px (11 rules) or 10 px (15
+rules). --text-1 #9a9890 is fine at 5.5-6.7:1, and the status colours are around 4.0-5.7, with
+red on bg-3 at 4.05 failing.
+'''
+why = '''
+Most of the explanatory UI (axis labels, hints, timestamps, 'no path data') is hard to read,
+especially on the low-brightness dark theme.
+'''
+evidence = '''
+node contrast.js (WCAG relative luminance): 'text-2 bg-0 2.72 bg-1 2.59 bg-2 2.45 bg-3 2.24';
+'text-1 bg-0 6.69 ... bg-3 5.52'; 'red ... bg-3 4.05'. grep -c 'font-size:9px' -> 11,
+'font-size:10px' -> 15.
+'''
+hint = '''
+Raise --text-2 to about #8a887f (4.5:1 or better on bg-2) and use at least 11-12 px for text.
+'''
+
+[[finding]]
+id = "DB-104"
+title = "2080-line single file mixing CSS, markup and ~1600 lines of JS with global mutable state"
+severity = "medium"
+category = "design"
+file = "telemetry_dashboard/index.html"
+anchor = "<script>"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 470
+what = '''
+Three unrelated tools (Live, Demo, Test runner) share one inline script with about 40 top-level
+`let` globals (activeRun, selectedFile, liveFollow, stopRequested, demoState, wsConn, tg* ...)
+and window._runDoneCb. Cross-feature coupling is implicit: tgScrubTo reads activeRun, and
+liveGridUpdate depends on selectedFile/liveFollow. Hard-coded registries (TEST_FILES L836,
+NO_PATH_SUITES L489, LOGGED_GRID_SUITES L500) duplicate knowledge of the tests/ folder, so new
+suites never appear and renamed ones break.
+'''
+why = '''
+Hard to test, review or change safely. Most of the race bugs above come from shared mutable
+globals.
+'''
+evidence = '''
+wc -l index.html -> 2081. Script spans L470-2080. Read the globals at L606-609, L860-869, L1307,
+L1369-1371, L1506-1507.
+'''
+hint = '''
+Split into style.css plus one ES module per tab plus shared parse/draw modules. Wrap per-tab
+state in objects. Discover suites from tests/*_test.py (main already lists files) instead of
+hard-coding them.
+'''
+
+[[finding]]
+id = "DB-105"
+title = "Map chosen by keyword guess from hard-coded copies of the test fixtures"
+severity = "medium"
+category = "design"
+file = "telemetry_dashboard/index.html"
+anchor = "function inferMapKey(lines, file) {"
+symbol = "inferMapKey"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 505
+what = '''
+Unless a test logs MAP/MAPROW, the preview picks one of the fixed MAPS (L476-486, copies of the
+obstacle_map() fixtures in AStar/DStar tests) by regex over all the case's text: any mention of
+'obstacle', even 'no obstacles', selects obstacle8, and 'waypoint|mission|pickup|delivery' in
+the filename or text selects a 20x20 map. If a test fixture changes, the drawn map becomes wrong
+with no warning, and the path is drawn over walls that are not there.
+'''
+why = '''
+The preview can show the planner cutting through walls, or a wall-free map, on a correct path.
+This is the problem the MAP/MAPROW mechanism was added to fix, but only five suites use it.
+'''
+evidence = '''
+node adversarial.js: 'Start: (0,0) Goal: (7,7) on a map with no obstacles' -> obstacle8; 'entire
+map clear; obstacle avoidance not needed' -> obstacle8; 'Test mission state machine'
+(foo_test.py) -> clear20. node maps.js shows the current logs happen to choose consistent maps.
+'''
+hint = '''
+Have every grid-based test log MAP/MAPROW (one helper in the test harness), and drop the keyword
+guessing and the duplicated fixtures.
+'''
+
+[[finding]]
+id = "DB-106"
+title = "Start/goal/path/pose scraping regexes give wrong coordinates on plausible log lines"
+severity = "medium"
+category = "robustness"
+file = "telemetry_dashboard/index.html"
+anchor = "function inferStartGoal(lines) {"
+symbol = "inferStartGoal / inferPath / inferPoseTrail"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 546
+what = '''
+startRe/goalRe (L544-545) match 'start'/'goal' anywhere, including inside words, with any
+non-comma text before ':' or '(', and then round floats. inferPath (L559) takes every 'X: n, Y:
+m' line, including the planners' own warnings ('Start coords are X: 9, Y: 9',
+astar.py/dstar_lite.py), and only accepts integers. inferPoseTrail (L568) needs exactly
+'pose=(a,b)' with no space and no exponent, and otherwise silently returns no trail.
+'''
+why = '''
+The grid preview draws markers or paths at wrong cells, or shows 'no path data', and nothing
+warns about it. The whole preview depends on unstated log-format contracts with the Python
+tests.
+'''
+evidence = '''
+node adversarial.js: 'Restarting planner: 3, 2' -> start [3,2]; 'Kickstart (2 3)' -> start
+[2,3]; 'goal_tolerance=(0.4, 0.4)' -> goal [0,0]; inferPath on [warning 'Start coords are X: 9,
+Y: 9', 'X: 0, Y: 0', 'X: 1, Y: 1'] -> [[9,9],[0,0],[1,1]]; 'X: 2.75, Y: 3.9' lines -> null;
+'pose=(1.0, 2.0)' -> null; 'pose=(1e-3,2.0)' -> null.
+'''
+hint = '''
+Define explicit tagged records (for example 'START r c', 'GOAL r c', 'PATH r,c ...', 'POSE x y
+th'), as already done for MAP/MAPROW/CLOUD/HAZPRED, and parse only those.
+'''
+
+[[finding]]
+id = "DB-107"
+title = "anime.min.js (v3.2.2) is vendored but never loaded, so the trail animation never runs"
+severity = "medium"
+category = "dead-code"
+file = "telemetry_dashboard/index.html"
+anchor = "if (typeof anime==='undefined') { drawTestGrid(mapKey,start,goal,isPoseTrail?null:trail,total,isPoseTrail?trail:null,true); return; }"
+symbol = "animateTrail"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 765
+what = '''
+index.html has a single inline <script> (L470) and no <script src="anime.min.js">, and no commit
+in git history ever referenced it. `anime` is therefore always undefined, and animateTrail
+always takes the fallback at L765, which draws the finished trail at once. L762-764 and L766-767
+never run, tgAnim is never set, and tgAnimTimer/tgPathStep (L606) are never assigned
+(tgStopAnim's timer half is dead too). The 17 KB anime.js v3.2.2 file (MIT, (c) 2023 Julian
+Garnier) is tracked dead weight. Its MIT notice is kept in the file header, which satisfies the
+licence. README L20/L139 says the Test Runner 'animates each planner driving across its actual
+occupancy grid'. That happens only during a live stream (liveGridUpdate), not when a finished
+case is viewed.
+'''
+why = '''
+An advertised feature does not exist, the code carries unreachable paths, and the vendored
+library adds weight for nothing.
+'''
+evidence = '''
+grep -n "anime" index.html matched only the comment at L611/L760 and L765-766 (no script tag).
+`git log -S"anime.min.js" -- telemetry_dashboard/index.html` returned nothing. grep for
+tgAnimTimer/tgPathStep found only declarations and reads.
+'''
+hint = '''
+Add <script src="anime.min.js"></script>, or delete the library and replace it with a 20-line
+requestAnimationFrame tween. Remove tgAnimTimer/tgPathStep.
+'''
+
+[[finding]]
+id = "DB-112"
+title = "A stopped run's late close resets the next run's state; late lines rewrite a finalized result"
+severity = "medium"
+category = "bug"
+file = "telemetry_dashboard/index.html"
+anchor = "activeRun=null; activeRunTest=null; stopRequested=false; liveFollow=false;"
+symbol = "finishRun"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 1188
+what = '''
+stopRun (L1126-1134) calls finishRun(file,-1) straight away and says the process's later close
+'is ignored'. It is not fully ignored. (1) The killed process can still send stdout lines.
+onTestLine -> _bufferLine -> appendLine pushes them into runResults[file].lines after exit is
+already set, regroups the cases, and calls mergeCaseFromRun, so a finished result's verdicts can
+still change. (2) The later 'test:done' calls finishRun(file, code), which clears
+activeRun/activeRunTest/stopRequested/liveFollow at L1188, before the `result.exit!==null` guard
+at L1190. If the user has started a different suite B by then, B's activeRun is wiped. B keeps
+streaming, but the UI treats nothing as running, live-follow stops, and startRun's 'one run at a
+time' guard (L1162) lets a third run start alongside B.
+'''
+why = '''
+Concurrent runs, the wrong Stop/Run button state, case verdicts on a stopped suite that change
+afterwards, and lost live preview.
+'''
+evidence = '''
+node runner_race.js scenario 1: 'B started: activeRun = geometry_test.py' -> (A's close arrives)
+'after A close: activeRun = null (B is still running, pid 2)'; 'A finished result now has lines:
+[ TEST 1: first, FAIL: late line from the killed A process ]'; 'A case verdicts: [[1,false]]';
+'a THIRD run was allowed to start concurrently with B: true | procs alive: [ geometry_test.py,
+kinematics_test.py ]'.
+'''
+hint = '''
+Move the guard to the top of finishRun, before any global state changes, and only reset
+activeRun when activeRun === file. Better, use the run-id scheme and drop lines and exits from
+runs that are no longer active.
+'''
+
+[[finding]]
+id = "DB-113"
+title = "Reported suite time ('exit 0 · N ms', sum-time) mostly measures the UI's own pacing"
+severity = "medium"
+category = "logic"
+file = "telemetry_dashboard/index.html"
+anchor = "result.ms=Date.now()-result.t0;"
+symbol = "finishRun"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 1191
+what = '''
+t0 is set when the run starts (L1165) and ms is taken in finishRun, which only runs after
+_drainLines has played every buffered line back. Playback waits LINE_DELAY=30 ms per line and
+CASE_PAUSE=650 ms before every TEST header (L1308, L1339). The process's real duration is never
+measured, and main.js does not report it.
+'''
+why = '''
+The timing shown is mostly artificial. AStar_planner_test runs in 0.4 s (15 cases, 124 lines)
+but would show at least 15*650 + ~110*30 ≈ 13 s. A real performance regression would be hidden
+by the pacing.
+'''
+evidence = '''
+the full-suite run logs: summary.txt: 'AStar_planner_test | exit=0 | 0.4s | 124 lines'. Code
+path: L1338-1343 calls finishRun only after the buffer is empty; L1339 picks CASE_PAUSE before
+each header.
+'''
+hint = '''
+Time the process in main.js (from spawn to close) and send ms with test:done. Show that number,
+with the replay time separate if it is wanted at all.
+'''
+
+[[finding]]
+id = "DB-116"
+title = "Live map hard-coded to 20x20 at 0.5 m/cell; real map is 200x200 at 0.05 m, and map_init can't resize"
+severity = "medium"
+category = "design"
+file = "telemetry_dashboard/index.html"
+anchor = "const liveRows=20, liveCols=20;"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 1370
+what = '''
+liveRows/liveCols are constants. map_init (L1439-1442) assigns f.grid without reading its size.
+drawLiveMap (L1385-1391) always loops 20x20 over it, so a larger grid shows only its top-left
+20x20 cells (1 m x 1 m of a 10 m map) and a smaller grid throws TypeError at grid[r][cc2].
+liveExplored is always rebuilt at 20x20. Pose is shown as col*0.5 / row*0.5 metres (L1451-1452),
+which is 10x the project's 0.05 m resolution. Obstacles are drawn only where a cell `===1`, but
+a ROS nav_msgs/OccupancyGrid uses 0..100 and -1 in a flat row-major array, so real occupied
+cells (100) would draw as free. Row 0 is drawn at the top, while the ROS map origin is at the
+bottom left, so the map would also appear upside down.
+'''
+why = '''
+Even once a publisher exists, the tab would draw the wrong part of the map at the wrong scale
+and miss obstacles.
+'''
+evidence = '''
+Read L1370-1391 and L1439-1457. The brief and map assets give 200x200 cells at 0.05 m. For a
+10-row grid, drawLiveMap reads grid[10][0], which is undefined[0] and throws.
+'''
+hint = '''
+Take rows, cols and resolution from map_init. Accept the OccupancyGrid encoding (flat data,
+width, height, values 0-100 and -1, origin) and size the canvas from it. Convert world metres to
+cells with the same world_to_grid convention as utils/geometry.
+'''
+
+[[finding]]
+id = "DB-117"
+title = "WebSocket frame text goes into innerHTML unescaped, and window.navi turns that into code execution"
+severity = "medium"
+category = "security"
+file = "telemetry_dashboard/index.html"
+anchor = "d.innerHTML=`<span class=\"ll-ts\">${ts}s</span><span class=\"ll-msg\">${msg}</span>`;"
+symbol = "liveLog"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 1404
+what = '''
+liveLog builds its HTML with innerHTML from `msg`, which comes straight from the network: `case
+'log': liveLog(f.msg,f.level||'')` (L1466) and `liveLog('Replan: '+(f.reason||''),'warn')`
+(L1462). esc() exists (L1298) but is not used here. There is no Content-Security-Policy (no
+<meta http-equiv>, and main.js sets no headers), and the page already relies on inline handlers,
+so a frame such as {"type":"log","msg":"<img src=x onerror=...>"} runs script in the renderer.
+That script can call window.navi.runTest(file, testsDir) and window.navi.listTests, and main.js
+never validates either argument (separate finding), so the main process will spawn python on any
+path, including a UNC share. f.level and f.cls only reach className, so they inject classes, not
+markup.
+'''
+why = '''
+Realistic threat model: this is a local dev tool, and the user types the WebSocket URL (default
+ws://localhost:8765). The attacker would have to be the server the user connected to, meaning
+any local process on that port or a remote endpoint the user chose. Nothing in the repo produces
+frames today. Likelihood is low, but the impact is arbitrary code execution from one JSON
+message, so it is worth closing.
+'''
+evidence = '''
+Read L1401-1407 and L1436-1468: no escaping on the msg path. grep found no
+Content-Security-Policy in index.html or main.js. Chain to main: preload.js L6/L9 pass
+file/testsDir through, and main.js L49 uses path.join(testsDir, file). node paths.js:
+path.win32.join('\\\\attacker\\share\\tests','x.py') -> '\\attacker\share\tests\x.py'.
+'''
+hint = '''
+Set textContent on the message span instead of using innerHTML, the same way appendLine uses
+esc(). Add a strict CSP meta tag (script-src 'self') after moving the inline handlers to
+addEventListener.
+'''
+
+[[finding]]
+id = "DB-118"
+title = "Reconnect race: the old socket's onclose nulls the new wsConn and hides the live UI"
+severity = "medium"
+category = "bug"
+file = "telemetry_dashboard/index.html"
+anchor = "liveLog('Disconnected','warn'); wsConn=null;"
+symbol = "connectWS"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 1433
+what = '''
+connectWS closes the previous socket and makes a new one (L1416-1419), but the handlers close
+over the shared global, not their own socket. When the old socket's close event arrives
+(asynchronously, after the new socket exists), its onclose sets wsConn=null, hides #live-feed
+and shows the connect card again (L1429-1434). Example: double-click Connect while
+'connecting...'. The first socket's onclose nulls the second. The second then opens and shows
+the feed, but disconnectWS (L1471) finds wsConn null and the Disconnect button does nothing.
+Clicking Connect again leaves the earlier live socket open.
+'''
+why = '''
+The UI and the real connection get out of step, sockets leak, and Disconnect does nothing.
+'''
+evidence = '''
+Read L1414-1471. The handlers refer to `wsConn` and to DOM nodes, never to `this` or a local
+socket variable, and onclose sets wsConn=null without checking which socket closed.
+'''
+hint = '''
+Use `const ws = new WebSocket(url); wsConn = ws;` and in each handler return early with `if (ws
+!== wsConn) return;`.
+'''
+
+[[finding]]
+id = "DB-121"
+title = "Live map keeps no path/robot/goal state, so every frame erases what the previous one drew"
+severity = "medium"
+category = "bug"
+file = "telemetry_dashboard/index.html"
+anchor = "drawLiveMap(null,[Math.round(f.row),Math.round(f.col)],f.goal||null); break;"
+symbol = "connectWS onmessage"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 1455
+what = '''
+drawLiveMap(path, robotPos, goalPos) clears the canvas and draws only what it is given. The
+'path' frame passes the path but no robot (L1448). 'pose' passes the robot but no path (L1455).
+'explored', 'obstacle' and 'map_init' pass nulls (L1442, L1446, L1458). So the planned path
+disappears on the next pose message, the robot disappears on the next explored or obstacle
+message, and the goal shows only when that frame carries f.goal. The 'replan' case resets
+liveExplored without redrawing.
+'''
+why = '''
+In a live stream mixing pose (~10 Hz) and path updates, the path would flash for one frame and
+vanish.
+'''
+evidence = '''
+Read L1381-1399 and L1439-1462. No module-level path, robot or goal variable exists. Only
+liveMap and liveExplored persist.
+'''
+hint = '''
+Store the latest path, pose and goal in state like liveMap, and redraw everything from that
+state once per animation frame.
+'''
+
+[[finding]]
+id = "DB-125"
+title = "Demo A*/D* allow diagonal corner-cutting, which the real Python planners forbid"
+severity = "medium"
+category = "logic"
+file = "telemetry_dashboard/index.html"
+anchor = "function nbrs8(grid,r,c) {"
+symbol = "nbrs8"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 1621
+what = '''
+nbrs8 accepts any free diagonal neighbour. navi_bot/planners/astar.py (L134-136) and
+dstar_lite.py get_successors (L144-146) reject a diagonal when either orthogonal cell is
+occupied. The test suites check this too ('Path cost matches reference optimum (no corner
+cutting)'). So the demo's paths squeeze diagonally past obstacle corners, which the real planner
+(and a real robot footprint) cannot do.
+'''
+why = '''
+The interactive demo, presented in the README as 'watch A*/D* Lite/DWA solve', shows different
+paths from the code it claims to visualise.
+'''
+evidence = '''
+node demo.js: 'A* paths (n=1) to (18,18) that cut an obstacle corner: 165', for example '(1,1):
+5,2->6,3'; 'initial D* path corner cuts 4 [ 5,2->6,3, 8,6->9,7, 10,10->11,11 ]'. Python check:
+astar.py L134-136.
+'''
+hint = '''
+In nbrs8, skip diagonals where grid[r+dr][c] or grid[r][c+dc] is occupied, as the Python
+planners do.
+'''
+
+[[finding]]
+id = "DB-127"
+title = "Demo A* sorts the open list once per tick, then pops n nodes, giving non-optimal paths at speed > 1"
+severity = "medium"
+category = "bug"
+file = "telemetry_dashboard/index.html"
+anchor = "s.open.sort((a,b)=>a[0]-b[0]);"
+symbol = "stepAstar"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 1703
+what = '''
+stepAstar sorts s.open once, outside the `for (let i=0;i<n;i++)` loop, then shift()s n entries.
+Nodes pushed during the tick go unsorted to the end, so later pops in the same tick ignore
+lower-f nodes that were just added. Together with the goal test on pop (L1710), the expansion is
+no longer best-first, and the demo can stop on a longer path. n is the speed slider value (1-20,
+default 3).
+'''
+why = '''
+The demo, which is meant to show A*, gives different and suboptimal paths depending on animation
+speed, and the results disagree with the Python A*.
+'''
+evidence = '''
+node demo.js (index.html L1476-1987 headless): '[12,2] -> [5,16] | n=1: cost 17.485 | n=3: cost
+17.485 | n=20: cost 18.314'; 'A* speed 20 returned a longer path than speed 1 in 69/288 starts
+to (2,17); worst [[12,16],1.657, 11.243, 12.899]'.
+'''
+hint = '''
+Use a binary heap, or at least re-sort (or pick the minimum) before each pop inside the loop.
+'''
+
+[[finding]]
+id = "DB-128"
+title = "'path length (m)' stat is waypoints x 0.5, which is wrong for diagonals, off by one, and 3x off for DWA"
+severity = "medium"
+category = "bug"
+file = "telemetry_dashboard/index.html"
+anchor = "setDStat('d-len',(path.length*.5).toFixed(1));"
+symbol = "stepAstar / stepDstar / stepDwa"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 1714
+what = '''
+A* (L1714) and D* (L1805) report path.length*0.5: N waypoints counted as N segments, every step
+counted as 1 cell even on diagonals (√2), and the D* figure is not updated after a replan. DWA
+(L1984) reports trail.length*0.5, but each DWA step moves at most 0.3 cells, so it scales with
+step count, not distance.
+'''
+why = '''
+The headline metric on the Demo tab is wrong in every mode.
+'''
+evidence = '''
+node demo.js: A* (1,1)->(18,18): 21 waypoints -> d-len 10.5, true length 25.80 cells = 12.9 m.
+DWA (1,1)->(18,18): d-len 42.0, true trail length 24.83 cells = 12.4 m.
+'''
+hint = '''
+Sum the Euclidean segment lengths and multiply by the cell size, using one shared helper. Update
+it after a replan.
+'''
+
+[[finding]]
+id = "DB-131"
+title = "The Demo's 'DWA' is a greedy 9-heading sampler, not a dynamic window approach, but the notes say it is"
+severity = "medium"
+category = "docs"
+file = "telemetry_dashboard/index.html"
+anchor = "const candidates=[angle,angle+.35,angle-.35,angle+.7,angle-.7,angle+1.1,angle-1.1,angle+1.5,angle-1.5];"
+symbol = "stepDwa"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 1945
+what = '''
+stepDwa tries 9 fixed headings around the goal direction at a speed of min(0.3, 0.18*dist), and
+takes the FIRST one whose straight segment is collision-free (L1966). There are no (v, ω)
+samples, no acceleration-limited window, no trajectory rollout and no scoring. The fan rays are
+drawn only for display. ALGO_NOTES.dwa (L1503) says it 'samples velocity commands within a
+dynamic window, scores each trajectory for heading, clearance, and speed'. The code comment at
+L1948-1950 admits it picks the first free candidate. The real navi_bot/planners/dwa.py does
+build a dynamic window (compute_dynamic_window L278-309) and scores trajectories
+(score_trajectory L311).
+'''
+why = '''
+The tab teaches the wrong algorithm under the real algorithm's name and differs completely from
+the implementation it stands for. It also traps easily: (9,9)->(5,9) inside the U-shaped wall
+reports 'stuck'.
+'''
+evidence = '''
+node demo.js: '[9,9] -> [5,9] done true steps 50 status stuck'; '[5,15] -> [5,11] ... status
+stuck'. Read L1932-1987 vs dwa.py L155-311.
+'''
+hint = '''
+Either rename it ('greedy reactive') and fix the notes, or sample (v, ω) in a window and score
+heading, clearance and velocity like dwa.py.
+'''
+
+[[finding]]
+id = "EL-101"
+title = "macOS-only titleBarStyle 'hiddenInset' on a Windows-hosted app likely removes the window controls"
+severity = "medium"
+category = "config"
+file = "telemetry_dashboard/main.js"
+anchor = "titleBarStyle: 'hiddenInset',"
+symbol = "createWindow"
+source = "reviewer"
+confidence = "likely"
+lead_checked = true
+reviewed_line = 14
+what = '''
+'hiddenInset' is documented as macOS-only. On Windows, Electron treats any non-default
+titleBarStyle as a hidden title bar, and without titleBarOverlay the minimize/maximize/close
+buttons are not drawn. The README says the dashboard runs on a Windows host. index.html adds a
+drag region (L21) but no window controls of its own.
+'''
+why = '''
+On Windows the window may have no close or minimize buttons, leaving only Alt+F4 or the taskbar.
+'''
+evidence = '''
+Read main.js L8-21 and index.html L21-26. Electron docs: titleBarStyle 'hidden' on Windows hides
+the controls unless titleBarOverlay is set, and 'hiddenInset' is macOS only. Not checked by
+launching Electron (forbidden by the brief).
+'''
+hint = '''
+Use titleBarStyle:'hidden' with titleBarOverlay:{color, symbolColor} on win32, or only set
+hiddenInset when process.platform==='darwin'.
+'''
+
+[[finding]]
+id = "EL-104"
+title = "IPC runs python on any renderer-supplied path; file and testsDir are never validated"
+severity = "medium"
+category = "security"
+file = "telemetry_dashboard/main.js"
+anchor = "const scriptPath = path.join(testsDir, file);"
+symbol = "ipcMain 'test:run' / 'tests:list'"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 49
+what = '''
+'test:run' (L48-88) and 'tests:list' (L114-128) both run path.join(testsDir, file) on values
+from the renderer and spawn python on the result, with cwd = path.dirname(testsDir). Nothing
+checks that testsDir is the dialog-picked or default directory, that file is a basename on the
+known list, or that the result stays inside testsDir. '..\\..\\Downloads\\evil.py' and UNC paths
+both resolve. testsDir also comes back from localStorage (index.html L1109-1110) without checks.
+'''
+why = '''
+preload's runTest/listTests act as a 'run any Python file' primitive. Any script that ever runs
+in the renderer, through the liveLog XSS or a page navigation (see the webPreferences finding),
+gets code execution in the main-process user context. It is also a footgun when testsDir is
+stale or wrong.
+'''
+evidence = '''
+node paths.js: 'UNC testsDir -> \\attacker\share\tests\x.py | cwd \\attacker\share\'; 'traversal
+file -> C:\Users\me\Downloads\evil.py'.
+'''
+hint = '''
+In main, keep the tests directory that the dialog or default chose and ignore renderer-supplied
+dirs. Require `file` to match /^[\w-]+_test\.py$/ and to exist in that directory, and check that
+path.resolve(...) stays under it.
+'''
+
+[[finding]]
+id = "EL-107"
+title = "Processes tracked only by filename: an old process's close breaks a re-run of the same suite"
+severity = "medium"
+category = "bug"
+file = "telemetry_dashboard/main.js"
+anchor = "runningProcs[file] = proc;"
+symbol = "ipcMain 'test:run'"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 85
+what = '''
+runningProcs is keyed only by file (L39, L85), and the close/error handlers do `delete
+runningProcs[file]` and send 'test:done' {file, code} (L86-87) with no run id. Sequence: Stop
+suite F, then start F again before the killed process has closed. The old process's close
+deletes the NEW process's entry, and its 'test:done' reaches the renderer. There, onTestDone
+(index.html L1362) sets _pendingExit[F], and _drainLines finalizes the NEW run with the OLD exit
+code. After that the new process keeps running with nothing tracking it, and Stop (L41-46) can
+no longer kill it. Late stdout from the old process also lands in the new run's buffer.
+'''
+why = '''
+The new run is marked finished early with the wrong exit code, its later output goes into a
+finalized result, and a Python process is left running that the UI cannot stop. The window is
+only the kill-to-close latency (tens of ms), so it shows up when someone clicks Stop and then
+Run (or a case's 'run') quickly.
+'''
+evidence = '''
+node runner_race.js (index.html L471-1364 run headless with a fake window.navi that mirrors
+main.js L39-46/L85-87), scenario 2: 'runningProcs[F] is new proc? true' -> 'runningProcs[F]
+after old close: undefined' -> 'NEW run finalized by OLD close? exit = 1 activeRun = null new
+proc still alive: true' -> 'new proc killed by Stop? false'.
+'''
+hint = '''
+Give every run an id (a counter from the renderer or main). Key runningProcs by that id, include
+it in every test:line/test:done/test:error message, and have the renderer ignore messages whose
+id is not the active run's.
+'''
+
+[[finding]]
+id = "EL-111"
+title = "No tests for ~1600 lines of dashboard JS; placeholder npm test script"
+severity = "medium"
+category = "tests"
+file = "telemetry_dashboard/package.json"
+anchor = "\"test\": \"echo \\\"Error: no test specified\\\" && exit 1\""
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 8
+what = '''
+None of the dashboard logic is tested: the parsers (parseLine, groupIntoCases, infer*), the
+runner state machine and the demo planners. `npm test` is the npm-init placeholder that always
+exits 1. Everything lives in one inline <script>, so nothing can be imported by a test runner.
+'''
+why = '''
+The bugs reported here (verdict flips, run races, A* ordering, path-length stat) are exactly
+what small unit tests would catch, and the parsers are tightly tied to the Python log format,
+which keeps changing.
+'''
+evidence = '''
+package.json L6-9. No *.test.js or spec files under telemetry_dashboard (excluding
+node_modules). The repo CI runs only the Python suites.
+'''
+hint = '''
+Move the pure functions into modules (parse.js, demo-planners.js), add node:test unit tests,
+including the real logs as fixtures, and wire `npm test` into CI.
+'''
+
+[[finding]]
+id = "DB-102"
+title = "Inline on* handlers throughout the markup"
+severity = "low"
+category = "standards"
+file = "telemetry_dashboard/index.html"
+anchor = "<button class=\"main-tab active\" onclick=\"showPage('live',this)\">Live</button>"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 287
+what = '''
+22 inline handlers (17 onclick, 4 onchange, 1 oninput with inline DOM code at L397) call global
+functions. A script-src CSP without 'unsafe-inline' cannot be added while they exist, and every
+handler target has to stay a global.
+'''
+why = '''
+Blocks the main mitigation for the liveLog XSS and spreads behaviour between HTML and JS.
+'''
+evidence = '''
+grep -o 'onclick=|oninput=|onchange=' index.html | uniq -c -> 17 onclick, 4 onchange, 1 oninput.
+'''
+hint = '''
+Attach the handlers with addEventListener in the script (or a module), then add a CSP.
+'''
+
+[[finding]]
+id = "DB-103"
+title = "Canvas-only maps have no text alternative"
+severity = "low"
+category = "standards"
+file = "telemetry_dashboard/index.html"
+anchor = "<canvas id=\"demo-grid-canvas\"></canvas>"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 368
+what = '''
+All three maps (live L314, demo L368, test L442) are bare <canvas> elements with no aria-label,
+role=img or fallback text. Path, robot pose and start/goal exist only as pixels. The test grid
+title is the only text, and it shows start→goal.
+'''
+why = '''
+Screen-reader users get nothing from the main visual output, and the information cannot be
+copied.
+'''
+evidence = '''
+Read L314, L368, L442.
+'''
+hint = '''
+Add role="img" with an aria-label updated on each draw (for example 'A* path, 21 waypoints,
+(1,1) to (18,18)').
+'''
+
+[[finding]]
+id = "DB-108"
+title = "Error-level regex is unanchored after the alternation: any '...Error ' word marks the line as an error"
+severity = "low"
+category = "bug"
+file = "telemetry_dashboard/index.html"
+anchor = "if (/^(Traceback \\(most recent call last\\)|File \")|\\w+Error[: ]/.test(raw)) return {level:'error',text:raw};"
+symbol = "parseLine"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 808
+what = '''
+Because of alternation precedence, `\w+Error[: ]` is matched anywhere in the line, not at its
+start. A plain print such as 'checking that ValueError is raised for bad input' is shown in red
+as an ERROR.
+'''
+why = '''
+The output is coloured misleadingly for tests that check exceptions.
+'''
+evidence = '''
+node adversarial.js: parseLine('checking that ValueError is raised for bad input') ->
+{"level":"error",...}.
+'''
+hint = '''
+Use /^(?:Traceback \(most recent call last\)|File "|\w+(?:Error|Exception)\b:)/.
+'''
+
+[[finding]]
+id = "DB-110"
+title = "Suite and case rows are clickable divs that can't be reached by keyboard"
+severity = "low"
+category = "standards"
+file = "telemetry_dashboard/index.html"
+anchor = "if (tf.status!=='todo') div.onclick=()=>selectFile(tf.file);"
+symbol = "renderTestList / renderCaseList"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 924
+what = '''
+Test-suite rows (L921-924) and case rows (L962-974) are <div>s with onclick and no tabindex,
+role or key handler, so suites and cases cannot be selected from the keyboard or by assistive
+technology. Goal placement on the demo map is right-click only (L2063); the number inputs offer
+an alternative, but the hint at L389 does not mention it. The status badges use colour only.
+'''
+why = '''
+The Tests tab cannot be used without a mouse.
+'''
+evidence = '''
+Read L916-977 and L2062-2063.
+'''
+hint = '''
+Use <button> elements, or add role="button" tabindex="0" with Enter/Space handlers. Mention the
+coordinate inputs in the hint.
+'''
+
+[[finding]]
+id = "DB-111"
+title = "Run/Stop button and run-all chain act on hidden global state"
+severity = "low"
+category = "logic"
+file = "telemetry_dashboard/index.html"
+anchor = "document.getElementById('run-btn-test').textContent=activeRun?'Stop':'Run suite';"
+symbol = "selectFile"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 934
+what = '''
+With suite A running, selecting suite B labels B's button 'Stop', and clicking it stops A
+(runSelected -> stopRun stops activeRun). Nothing says which suite will stop. runAll
+(L1135-1140) calls selectFile for each suite, taking over the user's selection, and the chain
+continues only through window._runDoneCb. If startRun returns early (no testsDir, or a
+single-test run started in the 80 ms gap at L1226), the chain stops silently with no message.
+'''
+why = '''
+The UI is confusing, and Run all can quietly stop partway through.
+'''
+evidence = '''
+Read L928-934, L1120-1140, L1160-1183, L1226.
+'''
+hint = '''
+Label the button 'Stop <suite>', or disable it for non-active suites. Make runAll an explicit
+queue that reports when it ends early.
+'''
+
+[[finding]]
+id = "DB-114"
+title = "Misleading or garbled comments: 'every 50th line' vs %500, and the 'self-rewrite' note"
+severity = "low"
+category = "docs"
+file = "telemetry_dashboard/index.html"
+anchor = "// Only regroup on structurally interesting lines (or every 50th line)."
+symbol = "appendLine"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 1235
+what = '''
+L1235 says 'every 50th line' but L1240 uses `result.lines.length%500===0`. L612-613 explains
+tgStopAnim with '(Uses a temp so the literal "tgStopAnim()" doesn't appear here and
+self-rewrite.)', which reads like an artifact of an automated edit and means nothing to a
+reader. L611 mentions 'the anime.js instance', which never exists. L1303-1304 says the process
+'finishes almost instantly', but integration suites take 33-55 s.
+'''
+why = '''
+Comments that contradict the code mislead the next person editing it.
+'''
+evidence = '''
+Read L1235/L1240, L611-614, L1303-1304. summary.txt: astar_dwa_integration_test 55.2s.
+'''
+hint = '''
+Fix the number, delete the self-rewrite sentence, and update the anime and instant-finish
+remarks.
+'''
+
+[[finding]]
+id = "DB-115"
+title = "esc() doesn't escape quotes but is used inside a title=\"...\" attribute"
+severity = "low"
+category = "security"
+file = "telemetry_dashboard/index.html"
+anchor = "function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }"
+symbol = "esc"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 1298
+what = '''
+renderCaseList puts the name in an attribute, `title="${esc(name)}"` (L967), but esc only
+handles & < >. A case name containing a double quote (it comes from `python <file> --list`
+output or a 'TEST n:' log line) ends the attribute early and can add new attributes, such as an
+onmouseover handler.
+'''
+why = '''
+Today this needs a malicious test file, so the risk is small, but the helper looks safe for
+attributes when it is not. Every other use is element content, where it is fine.
+'''
+evidence = '''
+Read L1298 and L967: esc('a"b') returns 'a"b' unchanged.
+'''
+hint = '''
+Also escape " and ', or build the row with textContent and element.title = name.
+'''
+
+[[finding]]
+id = "DB-120"
+title = "Frame fields never validated; heading shown with ° but has no defined unit"
+severity = "low"
+category = "robustness"
+file = "telemetry_dashboard/index.html"
+anchor = "if (f.grid) liveMap=f.grid;"
+symbol = "connectWS onmessage"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 1440
+what = '''
+Frame fields are used as received. f.grid can be any shape (and a smaller one crashes the draw).
+f.row/f.col floats or strings become array indexes and are silently ignored (L1444, L1457).
+(f.heading||0).toFixed / (f.velocity||0).toFixed throw TypeError if a string arrives
+(L1453-1454). f.value is written into the map grid unchecked. Heading is printed with '°' with
+no conversion, but ROS yaw is in radians, so a correct publisher would show '1.6 °' for 90°.
+'''
+why = '''
+One malformed frame throws inside onmessage and the UI silently stops updating that panel. Units
+are guesswork without a schema.
+'''
+evidence = '''
+Read L1436-1468. JSON.parse is the only check.
+'''
+hint = '''
+Validate each frame type against a small schema (Number.isInteger and bounds for row/col,
+Number.isFinite for numbers). Document heading in radians and convert it for display.
+'''
+
+[[finding]]
+id = "DB-122"
+title = "Grid/path/goal/robot drawing copied across three canvases with repeated magic colours"
+severity = "low"
+category = "duplication"
+file = "telemetry_dashboard/index.html"
+anchor = "for (let r=0;r<DEMO_ROWS;r++) for (let cc=0;cc<DEMO_COLS;cc++) {"
+symbol = "drawDemoMap / drawLiveMap / drawTestGrid"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 1522
+what = '''
+The cell loop, polyline path, goal circle and start circle are implemented three times
+(drawTestGrid L669-747, drawLiveMap L1387-1398, drawDemoMap L1522-1589). drawRobot (L625) is
+shared by two of them, but drawLiveMap draws its own robot (L1398, with a different stroke
+width). Hex colours already defined as CSS variables (--red, --green, --amber, --purple) are
+hard-coded about 27 times in JS and in inline legend styles ('#2c2c2a', '#1a1a18', '#1d9e75',
+'#e24b4a', '#ba7517', '#7f77dd').
+'''
+why = '''
+A palette or marker change needs edits in many places, and the copies have already drifted, for
+example in grid-line alpha (.05 vs .03) and robot stroke.
+'''
+evidence = '''
+grep -c for those six hex colours in index.html -> 27. Read the three draw functions.
+'''
+hint = '''
+Write one drawGrid(ctx, grid, cell, opts) / drawPath / drawMarker helper set and one COLORS
+object (read from getComputedStyle once).
+'''
+
+[[finding]]
+id = "DB-123"
+title = "Demo 'A* drawing' block never draws anything"
+severity = "low"
+category = "dead-code"
+file = "telemetry_dashboard/index.html"
+anchor = "if (s.algo ==='astar' && s.explored) {"
+symbol = "drawDemoMap"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 1544
+what = '''
+s.explored is a 20x20 boolean array, not a {'r,c': count} map like rhsVis. Object.entries over
+it gives keys '0'..'19', and key.split(',') gives [r] with cc undefined, so the bounds check
+fails every time. Explored cells are already painted by the base cell loop (L1523).
+'''
+why = '''
+Dead code that looks like a feature (heat-shaded A* expansion).
+'''
+evidence = '''
+node misc.js: Object.entries([[true,false],[false,true]]).map(([k])=>k.split(',').map(Number))
+gives [ [ 0 ], [ 1 ] ], so cc is undefined and `cc>=0` is false.
+'''
+hint = '''
+Delete it, or track per-cell expansion counts if the shading is wanted.
+'''
+
+[[finding]]
+id = "DB-124"
+title = "Dense multi-statement one-liners and terse names hurt readability"
+severity = "low"
+category = "style"
+file = "telemetry_dashboard/index.html"
+anchor = "const[sr,sc]=s.start; ctx.fillStyle='#7f77dd'; ctx.beginPath(); ctx.arc(sc*C+C/2,sr*C+C/2,Math.max(3,C*.28),0,Math.PI*2); ctx.fill();"
+symbol = "drawDemoMap"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 1588
+what = '''
+Many lines pack 5-10 statements (L614, L745, L747 at 246 chars, L1287, L1397-1398, L1588-1589).
+Ternaries are used as statements (`i===0?ctx.moveTo(x,y):ctx.lineTo(x,y)`,
+`(!started||jump)?...`). Names are cryptic or inconsistent: cc2 (L1387), cc vs c, tg*/lp*/d-*
+prefixes, setStat vs setDStat (identical functions, L1409/L1611), heu, nbrs4 (unused), and an
+underscore-private style (_drainLines, _NOISE_RE) mixed with plain names.
+'''
+why = '''
+The logic bugs found here were hidden partly by how dense the code is. Code review and diffs on
+200-character lines are painful.
+'''
+evidence = '''
+awk: 8 lines over 200 chars, longest 246 at L747. setStat and setDStat bodies are identical
+(L1409-1412 vs L1611-1614). grep shows nbrs4 is defined at L1617 and never called.
+'''
+hint = '''
+Run Prettier, one statement per line, and merge setStat/setDStat. Remove nbrs4 and use
+descriptive names (col instead of cc2).
+'''
+
+[[finding]]
+id = "DB-126"
+title = "Demo lifecycle: A* 'no path' leaves the RAF loop running; flashObs timer touches whatever state is current"
+severity = "low"
+category = "bug"
+file = "telemetry_dashboard/index.html"
+anchor = "if (!s.done) { setDStat('d-status','no path','err'); demoLog('No path found','err'); s.done=true; }"
+symbol = "stepAstar"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 1700
+what = '''
+(1) When A*'s open list empties, s.done is set but stopDemo() is not called (D* and DWA do call
+it), so demoTick keeps scheduling requestAnimationFrame forever and the button stays 'Pause'.
+(2) L1833 `setTimeout(()=>{ if(demoState) demoState.flashObs=null; },600)` clears flashObs on
+whichever state is current after 600 ms, which may be a new one after Reset or Switch, and it
+does not redraw, so the red flash stays if the demo is paused. The timer is never cancelled on
+reset.
+'''
+why = '''
+Small, but it wastes CPU and leaves the UI state inconsistent.
+'''
+evidence = '''
+Read L1699-1702 against L1807-1810 (D* calls stopDemo). Read L1833 and resetSim/switchAlgo
+(L2020-2042): no clearTimeout.
+'''
+hint = '''
+Call stopDemo() on no-path. Capture `s` in the timeout (if (demoState===s) ...) and redraw, or
+clear the flash by tick count.
+'''
+
+[[finding]]
+id = "DB-129"
+title = "Demo D* Lite uses a different cost model and heuristic from dstar_lite.py"
+severity = "low"
+category = "logic"
+file = "telemetry_dashboard/index.html"
+anchor = "const k1=k2+heu(r,c,...s.start)+s.km;"
+symbol = "keyOf"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 1735
+what = '''
+The demo's D* uses Euclidean heu() (L1616) and diagonal cost √2 (L1744, L1794). dstar_lite.py
+uses the Manhattan heuristic_backward (L240-242), and cost() returns 1.0 for every move,
+diagonals included (L121-130). The demo also updates the changed vertices BEFORE km and start
+(L1838-1842), while the paper and dstar_lite.plan (L209-210) update km and s_last first. That
+order is still correct because stale keys are lower bounds and get fixed lazily, but it reads
+differently. Path extraction differs as well: the demo uses a visited-set greedy walk, Python
+takes min(cost+g).
+'''
+why = '''
+The demo's expansion order and paths will not match the real D* Lite. Learners comparing the two
+will be confused, and the gap hides that Python's Manhattan heuristic with unit diagonal cost is
+inadmissible on an 8-connected grid.
+'''
+evidence = '''
+Read index.html L1616, L1731-1756, L1838-1842 and dstar_lite.py L112-130, L205-210, L240-242.
+'''
+hint = '''
+Choose one cost model (octile heuristic with √2 diagonals is the consistent choice) and use it
+in both, or label the demo as an approximation.
+'''
+
+[[finding]]
+id = "DB-130"
+title = "stepDstar copies its compute-shortest-path, extraction and follow blocks"
+severity = "low"
+category = "duplication"
+file = "telemetry_dashboard/index.html"
+anchor = "if (s.phase==='replan') {"
+symbol = "stepDstar"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 1855
+what = '''
+The 'replan' phase (L1855-1903) is a near line-for-line copy of 'init' (L1761-1812): the same
+key check, expansion loop, termination test and greedy path extraction (visited vs visited2).
+'follow2' (L1905-1917) duplicates 'follow' (L1814-1853). The neighbour-cost expression
+`Math.abs(..)+Math.abs(..)>1?Math.SQRT2:1` appears 4 times (L1719, L1744, L1794, L1887).
+stepAstar has a third copy of the tick-throttled follow logic (L1682-1697).
+'''
+why = '''
+Fixes such as corner cutting or the path-length stat must be made in 2-4 places, and the copies
+have already drifted (follow2 has no obstacle injection, and replan does not update d-len).
+'''
+evidence = '''
+Diffed L1761-1812 against L1855-1903 by reading them. They differ only in variable names and log
+strings.
+'''
+hint = '''
+Extract computeShortestPath(s, n), extractPath(s) and followPath(s, n, onDone), and give D* one
+'follow' phase.
+'''
+
+[[finding]]
+id = "DB-132"
+title = "DWA 'replans' counts every off-axis step and floods the event log"
+severity = "low"
+category = "logic"
+file = "telemetry_dashboard/index.html"
+anchor = "if (a!==angle) { s.replans++; setDStat('d-replans',s.replans); demoLog('DWA avoidance','warn'); }"
+symbol = "stepDwa"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 1968
+what = '''
+Each tick where the straight-to-goal heading is blocked increments replans and logs 'DWA
+avoidance'. Hugging a wall does this every step (up to 20 steps per frame at top speed), so the
+stat counts steps, not replans, and the 80-entry demo log overflows with copies of the same
+line.
+'''
+why = '''
+The metric means nothing and the log loses useful entries.
+'''
+evidence = '''
+node demo.js: (1,1)->(18,18) took 85 steps and reported 'replans 10'. Read L1968.
+'''
+hint = '''
+Count changes of avoidance side or episodes, not steps, and rate-limit the log line.
+'''
+
+[[finding]]
+id = "EL-102"
+title = "No navigation/window-open guards, no CSP, sandbox only implicit"
+severity = "low"
+category = "security"
+file = "telemetry_dashboard/main.js"
+anchor = "webPreferences: {"
+symbol = "createWindow"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 16
+what = '''
+webPreferences turns on contextIsolation and turns off nodeIntegration, which is good. But there
+is no will-navigate handler and no setWindowOpenHandler, sandbox:true is not set explicitly (it
+relies on Electron's default since v20), and no CSP is set anywhere. If the page navigates (for
+example via the liveLog XSS: location='https://x'), the preload still runs in the new origin and
+exposes window.navi to it.
+'''
+why = '''
+Electron's security checklist covers all of these. They are cheap defence in depth for the IPC
+surface, which runs processes.
+'''
+evidence = '''
+main.js L8-21. index.html has no CSP meta tag. Nothing calls webContents.on('will-navigate') or
+setWindowOpenHandler.
+'''
+hint = '''
+Add sandbox:true, win.webContents.setWindowOpenHandler(() => ({action:'deny'})), a will-navigate
+handler that calls preventDefault for anything other than the local file, and a CSP.
+'''
+
+[[finding]]
+id = "EL-103"
+title = "Running test processes are not killed on window close; event.sender used after it may be destroyed"
+severity = "low"
+category = "robustness"
+file = "telemetry_dashboard/main.js"
+anchor = "app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });"
+source = "reviewer"
+confidence = "likely"
+lead_checked = true
+reviewed_line = 26
+what = '''
+No 'before-quit' or window 'closed' handler kills runningProcs. On macOS the app stays alive
+after the window closes, and on POSIX children outlive the parent, so a long integration suite
+(up to 55 s) keeps running. Its stream callbacks then call event.sender.send (L65, L69, L86-87)
+on a destroyed WebContents. Recent Electron throws 'Object has been destroyed' there, which
+becomes an uncaught exception in the main process. On Windows, libuv's job object kills children
+when Electron exits, so the problem is mainly macOS/Linux and the window-closed-but-app-alive
+case.
+'''
+why = '''
+Orphaned Python processes and main-process exceptions.
+'''
+evidence = '''
+Read main.js L25-27 and L58-88. No cleanup hooks. The throw-on-destroyed behaviour is from the
+Electron API and was not reproduced here (launching Electron is forbidden).
+'''
+hint = '''
+On 'before-quit' and window 'closed', kill everything in runningProcs. Before sending, check `if
+(!event.sender.isDestroyed())`.
+'''
+
+[[finding]]
+id = "EL-105"
+title = "Comment claims virtualenv support; code just runs whatever 'python' is on PATH"
+severity = "low"
+category = "docs"
+file = "telemetry_dashboard/main.js"
+anchor = "// Resolve the python executable — honours virtualenvs on Windows (MINGW64)"
+symbol = "ipcMain 'test:run'"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 51
+what = '''
+The comment says it 'honours virtualenvs', but the code hard-codes 'python' (win32) or
+'python3', duplicated at L116, and inherits the Electron process's PATH. A venv or pixi
+environment (the project's ROS 2 setup uses a pixi env) is used only if Electron happened to be
+started from an activated shell. Nothing checks for VIRTUAL_ENV, a configured interpreter, or
+the 'py' launcher.
+'''
+why = '''
+Tests may silently run under the wrong interpreter, for example one without numpy or
+scikit-learn, and fail with import errors that look like test failures.
+'''
+evidence = '''
+Read main.js L51-52 and L116.
+'''
+hint = '''
+Make the interpreter configurable (an env var or a settings field, defaulting to
+process.env.VIRTUAL_ENV/Scripts/python), define it once, and fix the comment.
+'''
+
+[[finding]]
+id = "EL-106"
+title = "Pipe chunks decoded separately, so multi-byte UTF-8 split across chunks becomes U+FFFD"
+severity = "low"
+category = "bug"
+file = "telemetry_dashboard/main.js"
+anchor = "buf += d.toString();"
+symbol = "streamLines"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 76
+what = '''
+Each 'data' Buffer is decoded on its own with toString(). When a multi-byte character such as
+'—' or '→' (used in test headers, for example 'TEST 19: Planning — path ...') straddles a chunk
+boundary, both halves decode as replacement characters.
+'''
+why = '''
+Test names and lines sometimes show garbled characters, more often with large outputs.
+'''
+evidence = '''
+node misc.js: decoding 'TEST 19: Planning — path' split inside the em dash -> "TEST 19: Planning
+��� path".
+'''
+hint = '''
+Call stream.setEncoding('utf8') (or use a StringDecoder) before attaching 'data'.
+'''
+
+[[finding]]
+id = "EL-108"
+title = "Spawn failure sends both test:error and test:done; synchronous errors escape the try"
+severity = "low"
+category = "robustness"
+file = "telemetry_dashboard/main.js"
+anchor = "proc.on('error', (err) => { delete runningProcs[file]; event.sender.send('test:error', { file, msg: err.message }); });"
+symbol = "ipcMain 'test:run'"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 86
+what = '''
+When python is not on PATH, Node emits 'error' (ENOENT) and then 'close' with code -4058, so the
+renderer gets test:error (which sets _pendingExit=1) and then test:done, which overwrites it
+with -4058. The suite shows 'exit -4058' instead of a clear 'python not found'. Also,
+path.join(testsDir, file) at L49 runs outside the try, so a non-string testsDir throws an
+uncaught exception in the main-process IPC listener. The try/catch around spawn catches only
+argument errors, not ENOENT.
+'''
+why = '''
+The most common setup failure (python missing) gets a confusing message. The main process can
+throw on bad input.
+'''
+evidence = '''
+node misc.js: spawn('definitely_not_a_cmd_xyz') -> 'event error ENOENT' then 'event close
+-4058'.
+'''
+hint = '''
+Track a `failed` flag so 'close' after 'error' sends nothing. Validate the arguments before
+path.join. Show a 'python not found on PATH' message.
+'''
+
+[[finding]]
+id = "EL-109"
+title = "tests:list swallows every error, so a broken suite just shows an empty case list"
+severity = "low"
+category = "robustness"
+file = "telemetry_dashboard/main.js"
+anchor = "if (err && !stdout) return resolve([]);"
+symbol = "ipcMain 'tests:list'"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 124
+what = '''
+Errors (missing python, ImportError in the test module, the 15 s timeout) resolve to [], and
+loadCaseList shows nothing. dialog is required inside the handler (L94) and fs/child_process
+inline (L107, L118), while path/spawn are imported at the top, which is inconsistent.
+'''
+why = '''
+When a suite cannot even be imported, the user gets no explanation.
+'''
+evidence = '''
+Read main.js L93-128 and index.html L982-996.
+'''
+hint = '''
+Resolve {cases, error: stderr} and show the error in the case list. Move the requires to the top
+of the file.
+'''
+
+[[finding]]
+id = "EL-110"
+title = "package.json metadata empty; lockfile git-ignored; caret Electron range"
+severity = "low"
+category = "config"
+file = "telemetry_dashboard/package.json"
+anchor = "\"description\": \"\","
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+also_reported = 1
+reviewed_line = 4
+what = '''
+description and author are empty and keywords is []. Electron is "^41.3.0", so any 41.x is
+accepted, and .gitignore L2 ignores telemetry_dashboard/package-lock.json, so `npm install` is
+not reproducible. (.gitignore L28 also ignores .gitignore itself, so these rules are not even in
+the repo.) Formatting is inconsistent (`"start" :` vs `"test":`).
+'''
+why = '''
+Builds are not reproducible for an app that runs subprocesses. Electron patch releases often
+carry security fixes, which is why the exact version should be pinned and reviewed.
+'''
+evidence = '''
+Read package.json and .gitignore. `git check-ignore -v .gitignore` ->
+'.gitignore:28:.gitignore'.
+'''
+hint = '''
+Commit package-lock.json, fill in the metadata, and keep the Electron version pinned through the
+lockfile.
+'''

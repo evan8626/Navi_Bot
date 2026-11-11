@@ -1,0 +1,1116 @@
+# System wiring and ROS 2 nodes
+#
+# Curated code-review findings. One [[finding]] per defect.
+# `anchor` is a literal piece of the offending line; the report re-locates it on
+# every build, so line numbers never go stale. See code_review/README.md for the
+# field reference and how findings are marked fixed.
+
+[[finding]]
+id = "PP-001"
+title = "A goal that arrives before the map crashes the planner node"
+severity = "critical"
+category = "bug"
+file = "navi_bot/path_planner.py"
+anchor = "self.DStar_local_planner.d_star_initialize(start, self.current_goal)"
+symbol = "PathPlannerNode.planning_loop"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+planning_loop() runs A* (which returns None when it has no grid) and then always runs the D*
+Lite section. With no map yet, DStarLitePlanner.occupancy_grid is None and get_successors()
+indexes it.
+'''
+why = '''
+Start-up order is not guaranteed in ROS 2. If the first goal and pose arrive before the latched
+map does, the timer callback raises and the node dies; nothing restarts it.
+'''
+hint = '''
+Nothing in planning_loop should run until a map has been received - guard the whole loop, not
+just the A* call.
+'''
+
+[[finding]]
+id = "RC-001"
+title = "The 50 Hz control loop takes 40x its period whenever it follows a path"
+severity = "critical"
+category = "performance"
+file = "navi_bot/robot_controller.py"
+anchor = "cmd = self.dwa.plan(pose, self.last_cmd, target, self.world_obstacles())"
+symbol = "RobotController.control_loop"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+control_loop() is on a 20 ms timer and calls DWAPlanner.plan() inside it. plan() evaluates 800
+trajectories in pure Python and costs ~50 ms with no obstacles and close to a second with twenty
+LIDAR returns in view.
+'''
+why = '''
+The loop that the module docstring says 'must complete within the deadline (20 ms)' runs at 1-2
+Hz in path mode. Commands are stale by the time they are published, and the safety governor in
+the same loop is checked at the same slow rate.
+'''
+hint = '''
+Separate the rates: plan at a rate DWA can sustain and let the fast loop do only the cheap work
+(safety checks, publishing the latest command).
+'''
+
+[[finding]]
+id = "RC-005"
+title = "DWA is fed world metres but indexes its map as if they were grid cells"
+severity = "critical"
+category = "bug"
+file = "navi_bot/robot_controller.py"
+anchor = "self.dwa.set_occupancy_grid(occupancy_to_grid(msg))"
+symbol = "RobotController.map_callback"
+source = "lead"
+confidence = "reproduced"
+also_reported = 3
+what = '''
+path_planner publishes the path in world metres; pose and LIDAR points are in metres too.
+DWAPlanner was written for the test 'sim frame' (1 cell = 1 unit, x = row, cell centres at
+integers). robot_controller hands it the 0.05 m/cell map unchanged, and DWA does int(round(x)),
+int(round(y)) on metric coordinates to look cells up.
+'''
+why = '''
+Three things are wrong at once - scale (x20), axis order (world x is the column), and a
+half-cell offset. More than half of the map's walls are classified as moving obstacles (so the
+yield rule fires on shelves) and the map-bounds check accepts poses far outside the map. DWA's
+distances (CONTACT, CELL_RADIUS, YIELD_*) are also in sim cells, not metres.
+'''
+hint = '''
+DWA needs one explicit frame. Either convert at the boundary (as path_planner does with
+world_to_grid) or give DWA the map resolution and origin and make every constant metric.
+'''
+
+[[finding]]
+id = "SM-001"
+title = "The delivery goal is never published, so no mission can complete"
+severity = "critical"
+category = "bug"
+file = "navi_bot/state_machine.py"
+anchor = "def handle_navigating_to_delivery(self):"
+symbol = "StateMachine.handle_navigating_to_delivery"
+source = "lead"
+confidence = "reproduced"
+also_reported = 3
+what = '''
+handle_navigating_to_pickup() builds a Pose2D from pickup_location and publishes it on
+/goal_pose. handle_navigating_to_delivery() publishes nothing: it only waits for is_at_goal.
+Mission.delivery_location is stored in __init__ and never read again.
+'''
+why = '''
+After the pickup the robot is never told where to go. The state machine waits in DELIVERY_NAV
+forever. The test suites do not notice because they set is_at_goal = True by hand instead of
+driving the robot there.
+'''
+hint = '''
+Compare the two handlers side by side: the delivery handler is missing the step the pickup
+handler performs before it checks is_at_goal.
+'''
+
+[[finding]]
+id = "SYS-001"
+title = "The launched system can never move: nothing publishes pose or LIDAR data"
+severity = "critical"
+category = "design"
+file = "navi_bot/robot_controller.py"
+anchor = "self.pose_sub = self.create_subscription(Pose2D, '/pose', self.pose_callback, 10)"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+robot.launch.py starts map_publisher, robot_controller, state_machine and path_planner.
+robot_controller subscribes to /pose and /scan and path_planner to /current_pose, but no node in
+the package publishes any of them, and nothing consumes /cmd_vel. WheelOdometry and
+LidarProcessor exist as classes but are not wired into any node.
+'''
+why = '''
+With no pose, path_planner logs 'Current pose unknown, cannot plan' ten times a second and never
+plans; robot_controller sits at pose (0, 0, 0) with an empty world. The README's 'autonomously
+navigates a mapped environment' describes the test harness, not the launched graph.
+'''
+hint = '''
+Decide which node owns localisation (an odometry node, or a kinematic simulator that integrates
+/cmd_vel) and publish one pose topic from it; add it to the launch file.
+'''
+
+[[finding]]
+id = "PP-002"
+title = "A goal received before the map is converted with the wrong resolution, permanently"
+severity = "high"
+category = "bug"
+file = "navi_bot/path_planner.py"
+anchor = "self.current_goal = world_to_grid(msg.x, msg.y, self.map_origin, self.map_resolution)"
+symbol = "PathPlannerNode.goal_callback"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+goal_callback() converts the goal from metres to a grid cell immediately, using map_resolution
+and map_origin. Until the first map arrives those are the defaults (1.0 m/cell, origin 0,0). The
+converted cell is stored; the original metres are not.
+'''
+why = '''
+With the 0.05 m warehouse map, a goal at (5.0, 5.0) m received early becomes cell (5, 5) - a
+point 25 cm from the map corner - and stays that way after the map arrives.
+'''
+hint = '''
+Keep the goal in world coordinates and convert at planning time, when the map geometry is known.
+'''
+
+[[finding]]
+id = "PP-003"
+title = "A changed map never triggers a replan"
+severity = "high"
+category = "logic"
+file = "navi_bot/path_planner.py"
+anchor = "def map_callback(self, msg):"
+symbol = "PathPlannerNode.map_callback"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+replanning_needed is set only by goal_callback(). map_callback() hands the new grid to the
+planners and returns; planning_loop() exits immediately while replanning_needed is False.
+'''
+why = '''
+The README's 'replans dynamically when obstacles appear' is not implemented at node level: after
+an obstacle appears on the published path the robot keeps following the old path. (Today it only
+replans by accident, because the state machine re-sends the goal five times a second - see
+SM-002.)
+'''
+hint = '''
+A map update is a reason to replan; decide whether every update should, or only one that touches
+the current path.
+'''
+
+[[finding]]
+id = "PP-005"
+title = "The global planner ignores the robot's size: paths run 2.5 cm from walls"
+severity = "high"
+category = "logic"
+file = "navi_bot/path_planner.py"
+anchor = "grid = ((raw >= 50) | (raw == -1)).astype(int)"
+symbol = "PathPlannerNode.map_callback"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+map_callback() binarises the occupancy grid and passes it straight to A*. Nothing inflates
+obstacles by the robot radius (config's obstacle_inflation_radius: 0.3 is never read). A* treats
+the robot as a point and happily routes its centre through the cell next to a wall.
+'''
+why = '''
+The published path is not drivable by a 25 cm-radius robot. DWA then rejects every trajectory
+near it (its own contact radius is 0.875), so the two planners deadlock against each other on
+the real map.
+'''
+hint = '''
+Inflate the grid by the robot's footprint before planning (maps/generate_map.py already has an
+inflate() used for its connectivity check).
+'''
+
+[[finding]]
+id = "PP-008"
+title = "Every goal message forces a full replan, even when the goal has not changed"
+severity = "high"
+category = "logic"
+file = "navi_bot/path_planner.py"
+anchor = "self.replanning_needed = True"
+symbol = "PathPlannerNode.goal_callback"
+source = "lead"
+confidence = "reproduced"
+what = '''
+goal_callback() unconditionally sets replanning_needed and clears dstar_initialized. The state
+machine publishes the same goal on every tick (SM-002).
+'''
+why = '''
+The planner re-runs A* and re-initialises D* Lite five times a second for a goal that never
+changed - which also defeats the whole point of D* Lite, an incremental planner.
+'''
+hint = '''
+Compare the incoming goal with the current one before discarding the plan.
+'''
+
+[[finding]]
+id = "RC-002"
+title = "The safety stop is direction-blind and blocks turning, so the robot cannot recover"
+severity = "high"
+category = "logic"
+file = "navi_bot/robot_controller.py"
+anchor = "if self.closest_obstacle_dist < 0.5:"
+symbol = "RobotController.control_loop"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+The governor stops the robot when the closest LIDAR return in ANY direction is under 0.5 m, and
+it zeroes angular velocity as well as linear.
+'''
+why = '''
+An object behind or beside the robot stops it even when the way ahead is clear, and because
+rotation is zeroed too it cannot turn away. The robot stays frozen until the object leaves by
+itself. In an aisle under 1 m wide it never moves at all; under 2 m it is permanently limited to
+half speed.
+'''
+hint = '''
+A stop zone should consider the direction of travel, and the recovery behaviour (rotate? back
+away?) needs to be a decision rather than an accident.
+'''
+
+[[finding]]
+id = "RC-003"
+title = "DWA's acceleration limits are exceeded 25x when it is called from the control loop"
+severity = "high"
+category = "bug"
+file = "navi_bot/robot_controller.py"
+anchor = "self.last_cmd = (float(velocity), float(omega))"
+symbol = "RobotController.control_loop"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+DWA sizes its dynamic window as max_accel x 0.5 s (a hard-coded control period).
+robot_controller calls it every 20 ms and feeds the previous command back as the current
+velocity, so each call is allowed another 0.25 m/s.
+'''
+why = '''
+The commanded speed goes 0 -> 1 m/s in 80 ms: 12.5 m/s^2 against a stated limit of 0.5 m/s^2.
+The motors cannot follow, so DWA plans from a velocity the robot does not have. Using the
+commanded rather than measured velocity hides the gap.
+'''
+hint = '''
+The period DWA assumes and the period it is called at need to be the same number - see DW-002.
+'''
+
+[[finding]]
+id = "RC-006"
+title = "Sensor data is trusted forever: no timeout on /scan or /pose"
+severity = "high"
+category = "robustness"
+file = "navi_bot/robot_controller.py"
+anchor = "def lidar_callback(self, msg):"
+symbol = "RobotController.lidar_callback"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+The controller stores the latest scan-derived obstacle list and the latest pose and uses them on
+every cycle with no record of when they arrived. Before the first scan, closest_obstacle_dist is
+infinity.
+'''
+why = '''
+If the LIDAR or localisation stops publishing, the robot keeps driving on the last picture of
+the world. If the first scan is late, it drives as if the room were empty. For a module whose
+docstring describes a 'hard safety governor', staleness is the most likely real-world failure.
+'''
+hint = '''
+Record arrival times and refuse to move on data older than a small multiple of the sensor
+period.
+'''
+
+[[finding]]
+id = "RC-104"
+title = "Ctrl-C on real rclpy: shutdown() publish raises RCLError, so the stop Twist is never sent and cleanup is skipped"
+severity = "high"
+category = "bug"
+file = "navi_bot/robot_controller.py"
+anchor = "controller.shutdown()"
+symbol = "main"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 245
+what = '''
+rclpy's SIGINT handler shuts the context down before KeyboardInterrupt reaches main(); the
+finally block then calls controller.shutdown() which publishes on an invalid context and raises,
+so destroy_node() and rclpy.shutdown() never run. The mock's publish/shutdown never fail, so
+tests cannot see it. Same try/finally pattern (without the publish) in
+state_machine/path_planner/map_publisher main() calls rclpy.shutdown() unguarded.
+'''
+why = '''
+The robot is not commanded to stop on shutdown - it keeps executing the last /cmd_vel unless the
+base has its own timeout - and the process exits with a traceback.
+'''
+evidence = '''
+Real ROS 2 (activate_ros2.ps1) + python
+code_review/evidence/reviewer-scripts/src_nodes/real_shutdown.py (SIGINT raised from a timer
+inside spin): 'Shutting down robot controller' / 'main() raised: rclpy._rclpy_pybind11 RCLError
+Failed to publish: publisher's context is invalid'.
+'''
+hint = '''
+Use rclpy.init(signal_handler_options=...) / install your own handler, or publish the zero Twist
+before the context dies (e.g. on_shutdown callback / context.on_shutdown), and use
+rclpy.try_shutdown().
+'''
+
+[[finding]]
+id = "SM-003"
+title = "Pickup/delivery 'one-shot' timers are periodic and never cancelled"
+severity = "high"
+category = "bug"
+file = "navi_bot/state_machine.py"
+anchor = "self.create_timer(2.0, self._pickup_done)"
+symbol = "StateMachine.handle_picking_up"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+The 2 s pickup and delivery dwell is implemented with create_timer(). rclpy timers repeat until
+cancelled; these are neither cancelled nor destroyed, and a new one is created for every pickup
+and every delivery.
+'''
+why = '''
+On the real robot the first mission's timers keep firing every 2 s forever, setting
+pickup_complete / delivery_complete again and again, so later pickups and deliveries end as soon
+as they start. Timers also accumulate: two per mission. The mock hides all of this because its
+timers never fire at all.
+'''
+hint = '''
+Either keep one timer and cancel it in its own callback, or record the time the dwell started
+and compare against the clock on each tick.
+'''
+
+[[finding]]
+id = "SM-005"
+title = "An error silently discards the mission in progress, and ERROR is never observable"
+severity = "high"
+category = "logic"
+file = "navi_bot/state_machine.py"
+anchor = "def handle_error_state(self):"
+symbol = "StateMachine.handle_error_state"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+When has_error is set, update_state_machine() transitions to ERROR and immediately calls
+handle_error_state(), which clears the flag and transitions to IDLE in the same tick. Only the
+final state is published, so /robot_state goes X -> IDLE and ERROR is never seen.
+current_mission is left pointing at the failed mission and the next tick simply overwrites it
+with the next one from the queue.
+'''
+why = '''
+A failed pickup or delivery vanishes: not retried, not requeued, not reported. An operator
+watching /robot_state cannot tell that anything went wrong.
+'''
+hint = '''
+Decide what should happen to a failed mission (retry, requeue, park in a failed list) and stay
+in ERROR long enough to publish it.
+'''
+
+[[finding]]
+id = "SYS-002"
+title = "Robot pose is expected on two different topics (/pose vs /current_pose)"
+severity = "high"
+category = "bug"
+file = "navi_bot/path_planner.py"
+anchor = "self.current_pose_sub = self.create_subscription(Pose2D, '/current_pose', self.current_pose_callback, 10)"
+source = "lead"
+confidence = "reproduced"
+what = '''
+path_planner listens for the robot pose on /current_pose while robot_controller listens on
+/pose. They are the same quantity.
+'''
+why = '''
+Whichever name the future odometry node picks, one of the two consumers silently never receives
+a pose. Under ROS 2 a subscription to a topic nobody publishes is not an error, so nothing will
+flag it.
+'''
+hint = '''
+Pick one topic name and use it in both nodes (a shared constant would stop the two drifting
+apart again).
+'''
+
+[[finding]]
+id = "SYS-003"
+title = "There is no way to give the running robot a mission"
+severity = "high"
+category = "design"
+file = "navi_bot/state_machine.py"
+anchor = "def add_mission(self, mission):"
+source = "lead"
+confidence = "confirmed"
+what = '''
+add_mission() is an ordinary Python method. No subscription, service or parameter calls it, and
+config/mission_config.yaml (which defines stations and sample missions) is read by nothing. Only
+the tests ever add a mission, by calling the method in-process.
+'''
+why = '''
+The launched state_machine node idles forever. The mission lifecycle - the centre of the project
+description - cannot be exercised outside a test script.
+'''
+evidence = '''
+grep for add_mission across navi_bot/ and launch/ finds only its definition; grep for
+mission_config finds only a comment in launch/robot.launch.py.
+'''
+hint = '''
+Give the node an input for missions (a topic or service), or load the mission list from the
+config file at start-up.
+'''
+
+[[finding]]
+id = "LA-102"
+title = "RViz launched with use_sim_time True although the file says sim time must stay false"
+severity = "medium"
+category = "config"
+file = "launch/simulation.launch.py"
+anchor = "parameters=[{'use_sim_time': True}],"
+symbol = "generate_launch_description"
+source = "reviewer"
+confidence = "likely"
+lead_checked = true
+reviewed_line = 56
+what = '''
+l.26-29 explain that with sim time on and no /clock, ROS time never advances; robot nodes get
+'false', but rviz2 gets True. robot.launch.py:30 says 'simulation.launch.py overrides this to
+true' and this module's docstring says 'Wraps robot.launch.py with simulation time enabled' -
+both false.
+'''
+why = '''
+RViz's clock stays at 0 with no /clock publisher, so time-stamped data/TF can be dropped;
+contradictory docs.
+'''
+evidence = '''
+Reading simulation.launch.py:3-8, 26-34, 56 and robot.launch.py:30. RViz runtime effect not
+run-verified.
+'''
+hint = '''
+Pass the same use_sim_time LaunchConfiguration (default false) to rviz2 and fix both comments.
+'''
+
+[[finding]]
+id = "MP-101"
+title = "PGM reader ignores maxval; 16-bit maps and non-255 maxval are misread, and P2 comments break it"
+severity = "medium"
+category = "robustness"
+file = "navi_bot/map_publisher.py"
+anchor = "magic, w, h = tokens[0], int(tokens[1]), int(tokens[2])"
+symbol = "read_pgm"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 92
+what = '''
+tokens[3] (maxval) is read but never used. P5 always reads 1 byte per pixel and classify divides
+by 255. A maxval>255 (2-byte) file is silently mis-shaped or raises a reshape error, and a
+maxval<255 file is scaled wrongly. The P2 branch splits the whole remainder, so a '#' comment in
+the raster or a value >255 fails. Truncated P5 files fail with an opaque reshape error. The same
+code is duplicated in maps/generate_map.py L240-264.
+'''
+why = '''
+Maps exported by other tools (e.g. GIMP with maxval 100, or 16-bit images) would load with wrong
+occupancy or crash without a clear message. map_publisher_test only feeds the generated file.
+'''
+evidence = '''
+python code_review/evidence/reviewer-scripts/tests_integration/flip_pgm_probe.py: 'P5 maxval=100
+[100,0] classify -> [[-1, 100]]' (white read as unknown); 'P5 16-bit 2x1 -> [[255, 255]]'
+(65535,0 silently read as two white pixels); 'P2 with raster comment -> EXC ValueError ...
+b'#''; 'P5 truncated -> EXC ValueError cannot reshape array of size 5 into shape (4,4)'.
+'''
+hint = '''
+Honour maxval (choose dtype '>u2' for >255 and scale p by maxval), strip comments in P2,
+validate the byte count with a clear error, and add these cases to map_publisher_test.
+'''
+
+[[finding]]
+id = "PP-004"
+title = "D* Lite is initialised and solved on every plan, then its result is thrown away"
+severity = "medium"
+category = "dead-code"
+file = "navi_bot/path_planner.py"
+anchor = "# D Star Lite local replanning"
+symbol = "PathPlannerNode.planning_loop"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+After A* publishes its path, planning_loop() initialises D* Lite and runs
+compute_shortest_path(), then only checks one g-value. No path is extracted, nothing is
+published, and DStarLitePlanner.plan() - the incremental entry point - is never called.
+dstar_last is written and never read; DWA_local_planner is constructed and never used.
+'''
+why = '''
+The D* Lite work dominates the planning cycle and buys nothing, and the 'D* for local
+replanning' in the module docstring does not exist in the running system.
+'''
+hint = '''
+Either wire D* Lite in as the replanner (call plan() when the map changes and publish its path)
+or remove it from the node until it is needed.
+'''
+
+[[finding]]
+id = "PP-006"
+title = "Planning takes 2-3x its own time budget on the real map"
+severity = "medium"
+category = "performance"
+file = "navi_bot/path_planner.py"
+anchor = "self.planning_time_budget = 0.050"
+symbol = "PathPlannerNode.__init__"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+The node sets a 50 ms planning budget and counts misses, but one planning cycle on the 200x200
+warehouse map takes roughly 100-140 ms (A* in pure Python on a heap of tuples, plus the
+discarded D* Lite pass).
+'''
+why = '''
+Every plan is a deadline miss. Because rclpy's default executor is single-threaded, the node's
+other callbacks (pose, map, goal) are blocked for the duration.
+'''
+hint = '''
+Measure where the time goes first (the D* Lite pass in PP-004 is free to remove). A coarser
+planning grid or an early exit are the usual levers.
+'''
+
+[[finding]]
+id = "PP-007"
+title = "An unreachable goal is re-planned from scratch ten times a second, forever"
+severity = "medium"
+category = "robustness"
+file = "navi_bot/path_planner.py"
+anchor = "self.get_logger().warning(\"No path found to goal\")"
+symbol = "PathPlannerNode.planning_loop"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+When A* finds no path, replanning_needed stays True, so the next timer tick repeats the
+identical search. A failed A* search is the most expensive kind: it expands every reachable
+cell.
+'''
+why = '''
+One bad goal pins a CPU core and floods the log with 'No path found to goal'. Nothing tells the
+state machine, which keeps waiting (SM-008).
+'''
+hint = '''
+Treat 'no path' as a result to report, not a condition to retry at full rate.
+'''
+
+[[finding]]
+id = "PP-102"
+title = "Early returns skip deadline accounting: 300 ms ticks record zero deadline misses"
+severity = "medium"
+category = "logic"
+file = "navi_bot/path_planner.py"
+anchor = "logger.warning(\"No path to goal exists.\")"
+symbol = "PathPlannerNode.planning_loop"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 139
+what = '''
+The returns at l.140 and l.144 (and l.112) exit before the planning_time check at l.146-149, so
+the slowest case (unreachable goal) is never counted.
+'''
+why = '''
+Real-time monitoring under-reports exactly the worst ticks.
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+code_review/evidence/reviewer-scripts/src_planners/pp_probe.py unreachable goal -> "tick 0: 313
+ms, replanning_needed=True, deadline_misses=0" (same for ticks 1 and 2).
+'''
+hint = '''
+Measure in a try/finally (or a single exit path) so every tick is accounted.
+'''
+
+[[finding]]
+id = "RC-004"
+title = "DWA is shown only obstacles within 1.5 m, less than it needs to plan"
+severity = "medium"
+category = "logic"
+file = "navi_bot/robot_controller.py"
+anchor = "self.obstacle_threshold = 1.5 # meters - consider obstacles closer than this"
+symbol = "RobotController.__init__"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+lidar_callback() keeps returns closer than obstacle_threshold (1.5 m) and DWA receives only that
+list. DWA rolls trajectories out for 2 s (2 m at top speed) and starts its graduated yield at
+YIELD_RANGE = 2.5.
+'''
+why = '''
+Obstacles between 1.5 and 2.5 m are invisible to the planner, so the smooth slow-down never
+happens: the speed cap appears abruptly at 1.5 m and trajectories are scored against an
+incomplete world.
+'''
+hint = '''
+The list for the safety governor and the list for the planner have different jobs and need
+different ranges.
+'''
+
+[[finding]]
+id = "RC-102"
+title = "POINT-GOAL mode is unreachable in the running system and leaves a stale goal"
+severity = "medium"
+category = "design"
+file = "navi_bot/robot_controller.py"
+anchor = "def set_goal(self, x, y, theta=None):"
+symbol = "RobotController.set_goal"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 143
+what = '''
+set_goal is only callable from Python; nothing subscribes to a goal topic for point-goal mode.
+Once a point goal is set it is never cleared (MotionController.compute_control keeps returning
+commands toward it whenever no path is active), so after PATH mode finishes the controller falls
+back to driving to an old point goal. The safety governor is the only obstacle handling in this
+mode (PID drives straight at the goal through obstacles).
+'''
+why = '''
+Surprising motion after arrival in mixed use, and an obstacle-blind mode with no external
+trigger.
+'''
+evidence = '''
+Reading control_loop l.182-200 and motion_controller.compute_control; grep set_goal callers:
+tests only.
+'''
+hint = '''
+Either remove point-goal mode or expose it via a topic, clear the goal when reached, and
+document that it is obstacle-blind.
+'''
+
+[[finding]]
+id = "SM-002"
+title = "The pickup goal is re-published on every 5 Hz tick"
+severity = "medium"
+category = "logic"
+file = "navi_bot/state_machine.py"
+anchor = "self.goal_pub.publish(goal)"
+symbol = "StateMachine.handle_navigating_to_pickup"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+handle_navigating_to_pickup() runs on every state-machine tick while in PICK_NAV and publishes
+the same goal each time.
+'''
+why = '''
+Each copy sets replanning_needed in path_planner, so the planner throws its plan away and starts
+again five times a second (see PP-008), and robot_controller's follower restarts from waypoint 0
+on each new path.
+'''
+hint = '''
+Publish a goal when the state is entered (or when the goal changes), not on every tick.
+'''
+
+[[finding]]
+id = "SM-004"
+title = "Battery exactly at the full-charge threshold drops the robot into ERROR"
+severity = "medium"
+category = "bug"
+file = "navi_bot/state_machine.py"
+anchor = "elif self.battery_level > self.max_threshold and self.current_mission is None:"
+symbol = "StateMachine.handle_charging"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+handle_charging() tests battery_level < max_threshold in one branch and > max_threshold in the
+next. A level exactly equal to the threshold with no mission matches neither and falls to the
+final else: ERROR.
+'''
+why = '''
+A battery that charges to exactly the configured maximum - likely, if the level is reported in
+whole percent - produces a spurious error state.
+'''
+hint = '''
+Make the two comparisons cover the whole number line (one of them should include equality), and
+reserve the final else for states that are genuinely impossible.
+'''
+
+[[finding]]
+id = "SM-006"
+title = "A delivered mission is treated as runnable and can be executed again"
+severity = "medium"
+category = "logic"
+file = "navi_bot/state_machine.py"
+anchor = "if self.current_mission.status == 'pending' or self.current_mission.status == 'delivered':"
+symbol = "StateMachine.handle_idle_state"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+Both handle_idle_state() and handle_charging() send a mission whose status is 'delivered' to
+PICK_NAV, exactly like a 'pending' one, and current_mission is never cleared after delivery.
+'''
+why = '''
+After a charge cycle the robot re-runs the mission it has already delivered while the next
+mission waits in the queue.
+'''
+hint = '''
+Clear current_mission when a mission finishes, and treat 'delivered' as a terminal status rather
+than a synonym for 'pending'.
+'''
+
+[[finding]]
+id = "SM-008"
+title = "Navigation has no failure path: an unreachable goal hangs the mission forever"
+severity = "medium"
+category = "robustness"
+file = "navi_bot/state_machine.py"
+anchor = "def nav_status_callback(self, msg):"
+source = "lead"
+confidence = "confirmed"
+what = '''
+The state machine reacts to nav_status 'goal_reached' and 'error', but nothing in the package
+ever publishes 'error': path_planner only logs 'No path found', and robot_controller only logs
+'DWA returned no command'. There is no timeout in PICK_NAV or DELIVERY_NAV either
+(mission_config.yaml's max_mission_time is unused).
+'''
+why = '''
+A blocked or unreachable goal leaves the robot in PICK_NAV indefinitely with no error raised and
+the rest of the queue starved.
+'''
+evidence = '''
+grep for the string 'error' being published: no node constructs String(data='error'); only tests
+do.
+'''
+hint = '''
+Have the planner/controller report failure on /nav_status, and give the navigation states a
+deadline.
+'''
+
+[[finding]]
+id = "SM-102"
+title = "Battery level has no input and low/critical thresholds are unused: CHARGING can never finish"
+severity = "medium"
+category = "design"
+file = "navi_bot/state_machine.py"
+anchor = "self.declare_parameter('low_battery_threshold', 20.0)"
+symbol = "StateMachine.__init__"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 91
+what = '''
+battery_level is initialised to 100.0 and never updated from any topic (no subscription) - only
+tests write it. low_threshold and critical_threshold are read but never used, so there is no
+mid-mission low-battery or critical abort. Once in CHARGING with no mission the machine can only
+stay there, because nothing raises battery_level.
+'''
+why = '''
+The battery/charging half of the state machine is untestable through public inputs and cannot
+work on a robot.
+'''
+evidence = '''
+Grep battery_level in navi_bot/: only assignments/reads in state_machine.py and an unused field
+in robot_controller.py; low_threshold/critical_threshold referenced only at lines 97-98.
+'''
+hint = '''
+Subscribe to a battery topic (e.g. sensor_msgs/BatteryState or Float32) and use low/critical
+thresholds to preempt missions; test via that topic.
+'''
+
+[[finding]]
+id = "SM-103"
+title = "is_at_goal is a latched flag never tied to a specific goal: stale/duplicate 'goal_reached' advances states"
+severity = "medium"
+category = "logic"
+file = "navi_bot/state_machine.py"
+anchor = "if msg.data == 'goal_reached':"
+symbol = "StateMachine.nav_status_callback"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 121
+what = '''
+nav_status_callback sets is_at_goal=True for any 'goal_reached' in any state (incl.
+IDLE/PICKING_UP); it is only cleared at l.223 and l.250. Nothing resets it when a new mission or
+leg starts or on ERROR, and goal_reached carries no goal id.
+'''
+why = '''
+A 'goal_reached' received during PICKING_UP (e.g. from the 5 Hz re-published goal -> replan ->
+follower arriving immediately) after l.223 cleared the flag, or one left over from before ERROR,
+makes the next *_NAV state transition instantly without the robot moving.
+'''
+evidence = '''
+Reading: l.121-124 set unconditionally; l.206 and l.233 consume it; only l.223/l.250 clear it;
+handle_error_state (l.294-302) and handle_idle_state do not. robot_controller.py:184-187
+publishes goal_reached for every completed path, including freshly re-planned ones.
+'''
+hint = '''
+Clear is_at_goal when entering each *_NAV state and when publishing a new goal; better, tag
+goals/results with an id and only accept the matching one.
+'''
+
+[[finding]]
+id = "SM-104"
+title = "READY state is unreachable; handle_ready_state is dead code"
+severity = "medium"
+category = "dead-code"
+file = "navi_bot/state_machine.py"
+anchor = "elif self.current_state == RobotState.READY:"
+symbol = "StateMachine.update_state_machine"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 139
+what = '''
+No code calls transition_state(RobotState.READY) (grep RobotState.READY finds only this dispatch
+line). handle_ready_state (186-194) and the 'READY.' log message in handle_charging (283)
+therefore describe behaviour that never happens. No test reaches READY. Relatedly IDLE/CHARGING
+send a 'delivered' mission back to PICK_NAV (lines 180, 284), re-running a completed mission.
+'''
+why = '''
+Confusing state model; the git log claims 'state machine uses READY now'.
+'''
+evidence = '''
+Grep 'RobotState\.READY' in navi_bot/ -> only state_machine.py:139.
+'''
+hint = '''
+Either wire READY into the flow (and test it through public inputs) or remove it; treat
+'delivered' missions as finished.
+'''
+
+[[finding]]
+id = "SM-106"
+title = "Mission locations have no defined frame: tests pass (row, col), the node publishes them as world (x, y)"
+severity = "medium"
+category = "bug"
+file = "navi_bot/state_machine.py"
+anchor = "goal.x = self.current_mission.pickup_location[0]"
+symbol = "StateMachine.handle_navigating_to_pickup"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 201
+what = '''
+Mission locations are (row, col) grid cells everywhere in the tests. handle_navigating_to_pickup
+copies pickup_location[0] into Pose2D.x and [1] into .y. PathPlannerNode.goal_callback treats
+msg.x as world x, i.e. COLUMN (geometry.world_to_grid), so the planner's goal ends up
+transposed. The node never converts cells to world metres (no grid_to_world, no resolution), so
+on the 0.05 m warehouse map the goal is also off by a factor of 20.
+'''
+why = '''
+When the real pipeline runs, the robot drives to the mirror-image cell of every asymmetric
+pickup. waypoint_nav_test hides this because it overrides the goal by calling publish_goal with
+the correct swap right afterwards.
+'''
+evidence = '''
+python code_review/evidence/reviewer-scripts/tests_integration/wp_probe.py: for mission M007
+pickup (6,1) the planner receives goal_callback (6, 1) from StateMachine, i.e. world x=6 -> col
+6, row 1, while the test's own correctly-swapped publish is (1.0, 6.0). python
+code_review/evidence/reviewer-scripts/tests_integration/prod_frame_probe.py on the warehouse
+map: Mission pickup (18,60) gives 'state machine published /goal_pose x,y = (18, 60) -> planner
+current_goal (row,col) = (1200, 360)' (transposed and x20, off the 200x200 map).
+'''
+hint = '''
+Decide on one mission-location convention (world metres is the natural one) and convert with
+grid_to_world at the publish site, swapping axes.
+'''
+
+[[finding]]
+id = "LA-101"
+title = "robot.launch.py: misleading comment and a 'real robot' bring-up with no driver, sensors or localization"
+severity = "low"
+category = "docs"
+file = "launch/robot.launch.py"
+anchor = "# Declared below; simulation.launch.py overrides this to 'true'."
+symbol = "generate_launch_description"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 30
+what = '''
+Docstring calls it the minimal real-robot bring-up but nothing publishes /scan or /pose or
+consumes /cmd_vel (see wiring finding); README.md:66 says it launches 'sensors'. The
+use_sim_time comment is wrong (simulation.launch.py passes 'false').
+'''
+why = '''
+Readers believe the launch file is runnable end-to-end.
+'''
+evidence = '''
+Reading launch/robot.launch.py:5-11, 30, 79-90; simulation.launch.py:34; README.md:66.
+'''
+hint = '''
+State explicitly what is missing (driver, LIDAR, localization) and fix the comment.
+'''
+
+[[finding]]
+id = "MP-001"
+title = "The hand-written map YAML parser keeps quotes around a quoted file name"
+severity = "low"
+category = "robustness"
+file = "navi_bot/map_publisher.py"
+anchor = "spec['image'] = value"
+symbol = "parse_map_yaml"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+parse_map_yaml() splits each line on ':' and stores the value verbatim.
+'''
+why = '''
+`image: "map.pgm"` - which map_server, SLAM toolbox and most editors write - becomes a file name
+with literal quotes and the node dies with FileNotFoundError. A '#' inside a value is also
+treated as a comment.
+'''
+hint = '''
+Either handle the YAML scalar forms the map_server schema actually allows, or accept a
+dependency on a YAML parser.
+'''
+
+[[finding]]
+id = "PP-101"
+title = "map_callback re-implements ros_compat.occupancy_to_grid"
+severity = "low"
+category = "duplication"
+file = "navi_bot/path_planner.py"
+anchor = "raw = np.array(msg.data, dtype=np.int8).reshape(msg.info.height, msg.info.width)"
+symbol = "PathPlannerNode.map_callback"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+also_reported = 2
+reviewed_line = 86
+what = '''
+Lines 85-91 duplicate ros_compat.occupancy_to_grid (79-93) line for line instead of calling it.
+'''
+why = '''
+Two copies of the threshold/unknown-cell policy can drift.
+'''
+evidence = '''
+Compare the two blocks.
+'''
+hint = '''
+Call occupancy_to_grid(msg) and read resolution/origin from msg.info.
+'''
+
+[[finding]]
+id = "RC-101"
+title = "Unused kinematics/current_velocity/battery_level fields, and tests assert on them"
+severity = "low"
+category = "dead-code"
+file = "navi_bot/robot_controller.py"
+anchor = "self.kinematics = DifferentialDriveKinematics(wheel_base=0.4, wheel_radius=0.1, max_wheel_speed=10.0)"
+symbol = "RobotController.__init__"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 79
+what = '''
+self.kinematics, self.current_velocity and self.battery_level are never read. TEST 1 asserts
+battery_level == 100.0 and re-states the 1.5 literal for obstacle_threshold, testing dead state
+and duplicating a constant. The governor thresholds 0.5/1.0 are bare magic numbers (lines 203,
+207) duplicated in the tests' docstrings.
+'''
+why = '''
+Dead fields suggest functionality (battery monitoring, wheel limits) that does not exist.
+'''
+evidence = '''
+Grep: no other references to self.kinematics/current_velocity/battery_level in
+robot_controller.py; test lines 62-68.
+'''
+hint = '''
+Remove the dead fields (or use them), name the governor thresholds as constants and reference
+them from the tests.
+'''
+
+[[finding]]
+id = "RC-103"
+title = "Deadline-miss log lacks a separator ('28.96msTotal misses')"
+severity = "low"
+category = "style"
+file = "navi_bot/robot_controller.py"
+anchor = "f'Deadline miss! Loop took {loop_time*1000:.2f}ms'"
+symbol = "RobotController.control_loop"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+also_reported = 1
+reviewed_line = 226
+what = '''
+Adjacent f-strings are concatenated without a space.
+'''
+why = '''
+Garbled log line.
+'''
+evidence = '''
+the full-suite run logs: robot_controller_test.log line 244: '[WARN] Deadline miss! Loop took
+28.96msTotal misses: 1'.
+'''
+hint = '''
+Add '. ' between the two parts.
+'''
+
+[[finding]]
+id = "SM-007"
+title = "IDLE logs two INFO lines on every tick"
+severity = "low"
+category = "style"
+file = "navi_bot/state_machine.py"
+anchor = "Mission queue is empty. No missions to process."
+symbol = "StateMachine.handle_idle_state"
+source = "lead"
+confidence = "reproduced"
+also_reported = 1
+what = '''
+handle_idle_state() logs 'Mission queue is empty' and 'Robot is RobotState.IDLE' every 0.2 s,
+each with a trailing newline that prints a blank line as well.
+'''
+why = '''
+Ten lines a second of noise bury the messages that matter and grow log files without bound while
+the robot is doing nothing.
+'''
+hint = '''
+Log state changes rather than states; rclpy's logger also has throttle_duration_sec.
+'''
+
+[[finding]]
+id = "SM-101"
+title = "State-machine docs and log messages contradict the code"
+severity = "low"
+category = "docs"
+file = "navi_bot/state_machine.py"
+anchor = "States: IDLE, NAVIGATION, PICKING_UP, DELIVERING, CHARGING, ERROR"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+also_reported = 1
+reviewed_line = 6
+what = '''
+Module docstring lists NAVIGATION (no such state) and omits
+READY/PICK_NAV/DELIVERY_NAV/PICKED_UP/DELIVERED (DELIVERED is never used). Line 174 says battery
+'must be at or above' 30 but 30 is rejected (<=); line 266 hard-codes '30%'; line 276 says
+'above 95%' while the threshold is 98. IDLE logs two info lines (with stray '\n') every 200 ms
+when the queue is empty (167-168).
+'''
+why = '''
+Misleading docs/logs, log spam at 5 Hz.
+'''
+evidence = '''
+Read lines 6, 167-174, 266, 276.
+'''
+hint = '''
+Update the docstring, derive messages from the parameters, log only on transitions.
+'''
+
+[[finding]]
+id = "SM-105"
+title = "IDLE pops a mission with an unexpected status and then does nothing, losing it"
+severity = "low"
+category = "logic"
+file = "navi_bot/state_machine.py"
+anchor = "self.current_mission = self.mission_queue.pop(0)"
+symbol = "StateMachine.handle_idle_state"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 178
+what = '''
+If the popped mission's status is not pending/delivered/picked_up (e.g. 'navigating' after an
+error), no transition happens; the next tick pops the next mission over it. The same structure
+repeats in handle_charging (284-287).
+'''
+why = '''
+Missions can vanish silently.
+'''
+evidence = '''
+Read lines 178-183.
+'''
+hint = '''
+Handle all statuses explicitly (or reset status on re-queue) and log/raise on unknown ones.
+'''

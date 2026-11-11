@@ -1,0 +1,514 @@
+# Sensors (LIDAR, odometry, IMU)
+#
+# Curated code-review findings. One [[finding]] per defect.
+# `anchor` is a literal piece of the offending line; the report re-locates it on
+# every build, so line numbers never go stale. See code_review/README.md for the
+# field reference and how findings are marked fixed.
+
+[[finding]]
+id = "LD-001"
+title = "Thin obstacles and anything beyond ~3.4 m are filtered out as noise"
+severity = "high"
+category = "logic"
+file = "navi_bot/sensors/lidar_processing.py"
+anchor = "db = DBSCAN(eps=CLUSTER_EPS, min_samples=CLUSTER_MIN_SAMPLES).fit(obstacles)"
+symbol = "LidarProcessor.detect_obstacles"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+DBSCAN is run with eps = 0.3 m and min_samples = 10. At 1 degree per beam, neighbouring returns
+are r x 0.0175 m apart, so ten returns within 0.3 m of each other requires an object at least
+ten beams wide and closer than about 3.4 m. Everything else is labelled noise and dropped.
+'''
+why = '''
+A chair or table leg, a person's legs, a pallet at 5 m: none of them is reported. The perception
+layer is blind to exactly the obstacles a warehouse robot most needs to see. The test fixtures
+all sit at 1-3 m and 17+ beams wide, so the suite is green.
+'''
+hint = '''
+Fixed clustering parameters cannot suit a sensor whose point spacing grows with range. Ask what
+the smallest obstacle the robot must not hit looks like in beams at each range.
+'''
+
+[[finding]]
+id = "LD-002"
+title = "Every obstacle is reduced to one point, so a wall becomes a small disc"
+severity = "high"
+category = "design"
+file = "navi_bot/sensors/lidar_processing.py"
+anchor = "'centroid': cluster_points.mean(axis=0),"
+symbol = "LidarProcessor.detect_obstacles"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+detect_obstacles() returns one centroid per cluster and update_costmap() stamps a robot-radius
+disc at that centroid.
+'''
+why = '''
+A 4 m wall enters the costmap as a 0.55 m disc at its middle - 86% of it is missing - and the
+centroid of an L- or U-shaped obstacle can lie in free space.
+'''
+hint = '''
+A costmap needs the obstacle's extent. What information is thrown away between the cluster's
+points and its centroid?
+'''
+
+[[finding]]
+id = "LD-003"
+title = "update_costmap() writes obstacles with x and y swapped, in the wrong frame"
+severity = "high"
+category = "bug"
+file = "navi_bot/sensors/lidar_processing.py"
+anchor = "row = int(x / costmap.resolution)"
+symbol = "LidarProcessor.update_costmap"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+The method maps x to the row and y to the column; utils.geometry.world_to_grid - used by the
+planner and the map - maps x to the column and y to the row. It also uses the robot-frame
+centroid directly, with no robot pose and no map origin, and int() truncates towards zero so
+small negative coordinates land in cell 0.
+'''
+why = '''
+Obstacles are written mirrored across the map diagonal, relative to the robot instead of the
+world, and anything behind or to the right of the robot is dropped or misplaced. Every costmap
+test uses obstacles with x == y and recomputes the expected cell with the same formula, so none
+can fail.
+'''
+hint = '''
+There is already one function in the project that defines how a world point maps to a cell.
+'''
+
+[[finding]]
+id = "LD-004"
+title = "update_costmap() only works with the mock message, not a real OccupancyGrid"
+severity = "high"
+category = "bug"
+file = "navi_bot/sensors/lidar_processing.py"
+anchor = "grid = np.array(costmap.data).reshape(costmap.height, costmap.width)"
+symbol = "LidarProcessor.update_costmap"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+It reads costmap.height, .width and .resolution. Those attributes exist on the mock
+OccupancyGrid; nav_msgs/OccupancyGrid keeps them under .info.
+'''
+why = '''
+The first call on the robot raises AttributeError. The suite cannot see this because it imports
+the mock message directly.
+'''
+hint = '''
+ros_compat.occupancy_to_grid() already handles both shapes.
+'''
+
+[[finding]]
+id = "LD-006"
+title = "scan_match() does not recover a known transform (work in progress)"
+severity = "high"
+category = "bug"
+file = "navi_bot/sensors/lidar_processing.py"
+anchor = "def scan_match(self, current_scan, reference_scan, initial_guess=(0, 0, 0), max_iterations=20, tolerance=1e-5):"
+symbol = "LidarProcessor.scan_match"
+source = "lead"
+confidence = "reproduced"
+known_wip = true
+what = '''
+The first ICP iteration is in place but the result is not the alignment: see the three reviewer
+findings on this method for the specific causes.
+'''
+why = '''
+tests/scan_matching_test.py passes 3 of 12; the suite is correctly excluded from CI, but the
+dashboard lists it as 'ready' and the README status table says 'LIDAR processor: Complete,
+tested'.
+'''
+hint = '''
+Check each stage against a case you can verify by hand: two points and a pure translation, then
+a pure rotation.
+'''
+
+[[finding]]
+id = "IM-001"
+title = "ImuProcessor cannot be constructed (work in progress)"
+severity = "medium"
+category = "bug"
+file = "navi_bot/sensors/imu_processor.py"
+anchor = "self.accel_buffer = deque(max_len=buffer_size)"
+symbol = "ImuProcessor.__init__"
+source = "lead"
+confidence = "reproduced"
+known_wip = true
+also_reported = 2
+what = '''
+deque's keyword is maxlen; the line above it spells it correctly. process_imu_data() also
+appends to self.gyros_buffer, which does not exist.
+'''
+why = '''
+Every test in tests/imu_test.py fails on construction (0 of 9). Known and parked - listed so the
+report shows when it is fixed.
+'''
+hint = '''
+Compare the two deque lines.
+'''
+
+[[finding]]
+id = "IM-101"
+title = "Complementary filter design fuses accelerometer tilt into yaw, which accelerometers cannot observe"
+severity = "medium"
+category = "logic"
+file = "navi_bot/sensors/imu_processor.py"
+anchor = "# TODO: Compute angle from acceleromteter (tilt)"
+symbol = "ImuProcessor.update_orientation"
+source = "reviewer"
+confidence = "confirmed"
+known_wip = true
+reviewed_line = 111
+what = '''
+self.orientation is the heading (L31), but the planned correction is an accelerometer tilt
+angle. Gravity gives roll and pitch only, so yaw/heading is unobservable from an accelerometer.
+The current placeholder accel_angle=0.0 with alpha=0.98 makes the heading decay toward 0 (steady
+state 0.245 rad at 0.5 rad/s). imu_test test 9 correctly expects no decay, but its docstring
+('no contradicting accelerometer reference') implies such a reference could exist for yaw.
+'''
+why = '''
+Following the TODO as written would bias heading toward an unrelated tilt angle. Heading
+correction needs a magnetometer, scan matching or another absolute yaw source.
+'''
+evidence = '''
+Reading L99-115. Steady state of o = 0.98*(o + 0.5*0.01): o* = 0.0049/0.02 = 0.245 rad, versus
+the expected 1.0 rad after 2 s.
+'''
+hint = '''
+Integrate the gyro for yaw (with bias correction) and reserve the complementary filter for
+roll/pitch, or fuse yaw with a magnetometer or ICP heading. Reword the test 9 docstring.
+'''
+
+[[finding]]
+id = "IM-102"
+title = "Yaw 'complementary filter' with accel_angle=0 decays the heading to zero; detect_motion fires on gravity"
+severity = "medium"
+category = "logic"
+file = "navi_bot/sensors/imu_processor.py"
+anchor = "accel_angle = 0.0"
+symbol = "ImuProcessor.update_orientation"
+source = "reviewer"
+confidence = "reproduced"
+known_wip = true
+reviewed_line = 112
+what = '''
+orientation = 0.98*(orientation+w*dt) + 0.02*0, so a stationary robot's heading decays
+exponentially toward 0. Accelerometers cannot observe yaw at all, so a heading complementary
+filter needs another absolute reference. detect_motion compares |a| including gravity (9.81)
+against 0.1, so it always reports motion at rest.
+'''
+why = '''
+Heading estimate is wrong after ~1 s; motion detection is always True.
+'''
+evidence = '''
+python code_review/evidence/reviewer-scripts/src_nodes/misc_repro.py: 'stationary (gyro=0)
+heading 1.0 rad after 1 s at 100 Hz -> 0.1326 (should stay 1.0)', 'detect_motion() at rest with
+gravity on z -> True'.
+'''
+hint = '''
+Integrate gyro only for yaw (fuse with odometry/scan matching instead); remove gravity before
+detect_motion.
+'''
+
+[[finding]]
+id = "LD-005"
+title = "Clear-direction detection has a blind seam directly behind the robot"
+severity = "medium"
+category = "bug"
+file = "navi_bot/sensors/lidar_processing.py"
+anchor = "window = ranges[max(0, direction - window_half) : direction + window_half + 1]"
+symbol = "LidarProcessor.compute_clear_directions"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+The +/-15-sample window is clipped at the ends of the array instead of wrapping, and the '15
+degrees' is really 15 samples (the mock LaserScan's default increment is 0.1 rad, not 1 degree).
+'''
+why = '''
+On a 360-degree scan, directions next to the +/-180 degree seam ignore an obstacle a few degrees
+away on the other side and are reported clear.
+'''
+hint = '''
+A full-circle scan is a ring, not a line.
+'''
+
+[[finding]]
+id = "LD-102"
+title = "Readings below min_range become inf and are treated as clear; test 16 blesses inf==clear"
+severity = "medium"
+category = "robustness"
+file = "navi_bot/sensors/lidar_processing.py"
+anchor = "valid_ranges = np.where(valid_mask, ranges, np.inf)"
+symbol = "LidarProcessor.process_scan"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 62
+what = '''
+process_scan maps both too-far and too-close (< min_range 0.1 m) returns to inf.
+compute_clear_directions then treats inf as clear, and lidar_mock_test test 16 (L396-413)
+asserts that inf must be clear. A scan where every beam reads 0.05 m (something touching the
+sensor, or a blocked or dirty window) gives closest_obstacle=inf and every direction clear.
+'''
+why = '''
+The most dangerous case, an object closer than the sensor's minimum range, is reported as
+completely free space.
+'''
+evidence = '''
+python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_sensors/lidar_probe.py:
+'all readings 0.05 m -> closest inf all clear? True'.
+'''
+hint = '''
+Distinguish 'no return' from 'too close'. Treat below-min_range as blocked (or at least not
+clear), and add a test for it.
+'''
+
+[[finding]]
+id = "LD-104"
+title = "scan_match rotates by -theta (row-vector product) and estimates rotation from mean bearing differences"
+severity = "medium"
+category = "bug"
+file = "navi_bot/sensors/lidar_processing.py"
+anchor = "cur = np.dot(cur, np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]])) + np.array([tx, ty])"
+symbol = "LidarProcessor.scan_match"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+known_wip = true
+reviewed_line = 170
+what = '''
+L170 multiplies row vectors by R (cur @ R), which applies R^T, a rotation by -t_theta. Every
+update therefore rotates the wrong way. L165 estimates rotation as the mean of atan2 bearing
+differences about the sensor origin. That is not a rigid-alignment estimate, it is unweighted by
+range, and it wraps: two points 0.002 rad apart across the +-pi seam contribute ~6.28 rad.
+Translation (L163-164) is estimated before rotation from un-centred points, so the two are
+coupled.
+'''
+why = '''
+ICP diverges or stalls; this is the root cause of the 9 failing scan_matching tests (e.g. pure
+translation 0.2,-0.1 returns -0.177,-0.072).
+'''
+evidence = '''
+python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_sensors/icp_probe.py:
+'row-vector cur@R for theta=+0.3 gives [[ 0.9553 -0.2955]] (CCW should give [0.9553 0.2955] )';
+'bearing diff across seam (true ~0.002 rad): 6.2812'. Suite log: 'FAIL translation: got
+(-0.1771, -0.0717, 0.0217), want (0.2, -0.1, 0.0)'.
+'''
+hint = '''
+Use R @ p (or cur @ R.T). Solve rotation and translation jointly from centred correspondences
+(Kabsch/SVD, or a point-to-line least squares).
+'''
+
+[[finding]]
+id = "LD-105"
+title = "scan_match returns only the last iteration's increment and never applies initial_guess"
+severity = "medium"
+category = "bug"
+file = "navi_bot/sensors/lidar_processing.py"
+anchor = "dx, dy, dtheta = tx, ty, t_theta"
+symbol = "LidarProcessor.scan_match"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+known_wip = true
+also_reported = 1
+reviewed_line = 176
+what = '''
+initial_guess is unpacked (L150) and copied into tx,ty,t_theta (L156), but cur is never
+pre-transformed by it, and the loop overwrites tx/ty/t_theta on the first pass. Per-iteration
+increments are never composed, so L176 returns only the final small correction, not the
+accumulated transform. The spec (scan_matching_test docstring L8-21, tests 2-6) requires the
+total transform, with initial_guess as the starting prior.
+'''
+why = '''
+A converged ICP would return ~(0,0,0) whatever the true motion. The odometry prior is silently
+ignored (test 6).
+'''
+evidence = '''
+python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_sensors/icp_probe.py:
+'identity scans with initial_guess=(5,5,1) -> (0.0, 0.0, 0.0)'.
+'''
+hint = '''
+Apply the guess to cur before the loop and compose each increment into a running (x, y, theta).
+Return the composition.
+'''
+
+[[finding]]
+id = "LD-106"
+title = "scan_match crashes on empty input and max_iterations=0, and returns a near-identity on 2-point input"
+severity = "medium"
+category = "robustness"
+file = "navi_bot/sensors/lidar_processing.py"
+anchor = "return (dx, dy, dtheta), error"
+symbol = "LidarProcessor.scan_match"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+known_wip = true
+reviewed_line = 178
+what = '''
+With max_iterations=0 the loop body never runs and 'error' is unbound at L178
+(UnboundLocalError). Empty current raises ValueError from NearestNeighbors (test 10). Two points
+return a meaningless near-zero transform with no degenerate-input signal. The docstring L147
+says 'Returns: (dx, dy, dtheta)' but the function returns ((dx,dy,dtheta), error).
+'''
+why = '''
+The caller cannot fall back to odometry on a bad or empty scan; the node would crash instead.
+'''
+evidence = '''
+python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_sensors/icp_probe.py:
+'max_iterations=0 -> UnboundLocalError cannot access local variable 'error''. Suite log: 'FAIL
+empty: raised ValueError: Expected 2D array, got 1D array instead'.
+'''
+hint = '''
+Guard for too few points (return initial_guess, inf) before fitting, initialise error, and fix
+the docstring.
+'''
+
+[[finding]]
+id = "OD-001"
+title = "Odometry translates along the end-of-step heading, biasing every turn"
+severity = "medium"
+category = "bug"
+file = "navi_bot/sensors/odometry.py"
+anchor = "self.x += delta_s * np.cos(self.theta)"
+symbol = "WheelOdometry.update"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+update() adds the step's rotation to theta and then moves delta_s along the NEW heading. The
+robot actually travelled along headings between the old and the new one.
+'''
+why = '''
+Every curved step is rotated by half its turn angle. Over a 1 m-radius quarter circle in 8
+updates the pose is ~14 cm off; kinematics.compute_pose_update integrates the same motion
+exactly, so the project has two motion models that disagree.
+'''
+hint = '''
+Which heading best represents a step that starts at theta and ends at theta + dtheta?
+'''
+
+[[finding]]
+id = "OD-002"
+title = "The first update treats the encoders' absolute count as distance travelled"
+severity = "medium"
+category = "robustness"
+file = "navi_bot/sensors/odometry.py"
+anchor = "self.prev_left_ticks = 0"
+symbol = "WheelOdometry.__init__"
+source = "lead"
+confidence = "reproduced"
+also_reported = 2
+what = '''
+prev_left_ticks / prev_right_ticks start at 0, so the first update() computes the delta from
+zero. reset() restores the pose but not the tick baseline, and there is no handling for a
+fixed-width counter wrapping round.
+'''
+why = '''
+If the planner board restarts while the STM32 keeps counting, the pose jumps by the whole
+accumulated count (31 m for 50,000 ticks) and the reported speed is absurd. A 16-bit counter
+wraps after ~20 m of travel.
+'''
+hint = '''
+The first reading can only establish a baseline; it cannot be a measurement of motion.
+'''
+
+[[finding]]
+id = "LD-101"
+title = "LidarProcessor is not used by any node; robot_controller reimplements scan filtering"
+severity = "low"
+category = "dead-code"
+file = "navi_bot/sensors/lidar_processing.py"
+anchor = "from navi_bot.ros_compat import LaserScan"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 12
+what = '''
+No node imports LidarProcessor (grep); robot_controller.lidar_callback does its own range
+filtering. Importing this module pulls in ros_compat (and thus rclpy/mock) only for an unused
+LaserScan import, and scikit-learn at import time. obstacle_threshold 0.5 and
+min_obstacle_points are hard-coded duplicates of config values.
+'''
+why = '''
+Clustering/costmap features advertised in the README never run in the system.
+'''
+evidence = '''
+grep -rn LidarProcessor navi_bot: only lidar_processing.py itself.
+'''
+hint = '''
+Wire it into the controller (or a perception node) or mark it as library-only; drop the unused
+import.
+'''
+
+[[finding]]
+id = "LD-103"
+title = "Dead per-iteration computations in detect_obstacles (n_clusters, n_noise_)"
+severity = "low"
+category = "dead-code"
+file = "navi_bot/sensors/lidar_processing.py"
+anchor = "n_clusters = len(set(labels)) - (1 if -1 in labels else 0)"
+symbol = "LidarProcessor.detect_obstacles"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 96
+what = '''
+L96-97 compute n_clusters and n_noise_ inside the per-label loop and never use them (O(n) each
+per cluster). The condition at L98 (>= min_obstacle_points=3) is also always true given
+min_samples=10. scan_match L160 uses a bare assert in production code, which is skipped under
+python -O.
+'''
+why = '''
+Wasted work and noise in the code.
+'''
+evidence = '''
+Reading L92-104, L160.
+'''
+hint = '''
+Remove the unused lines and the redundant check.
+'''
+
+[[finding]]
+id = "OD-101"
+title = "reset() does not normalise theta or clear velocity; dt<=0 is silently accepted; tests do not pin these"
+severity = "low"
+category = "robustness"
+file = "navi_bot/sensors/odometry.py"
+anchor = "def reset(self, x=0.0, y=0.0, theta=0.0):"
+symbol = "WheelOdometry.reset"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 96
+what = '''
+reset(theta=10.0) leaves theta=10.0 (not in [-pi,pi]) and keeps the stale linear/angular
+velocity. update() with dt<=0 still integrates the pose and silently keeps old velocities. Test
+7 checks only the velocities on dt=0. Test 10 does not check velocity, normalisation or the next
+update after reset. Test 9 (L210) checks only that theta stays within bounds, which a clamp
+would also satisfy.
+'''
+why = '''
+Edge-case state inconsistencies, with no spec to say what is intended.
+'''
+evidence = '''
+python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_sensors/odom_probe.py:
+'reset(theta=10) -> (0.0, 0.0, 10.0) vel kept (0.628..., 0.0)'; 'dt=-1 -> (0.1256..., 0.0, 0.0,
+0.0628..., 0.0)'.
+'''
+hint = '''
+Normalise theta in reset, decide and document velocity/baseline semantics, reject or warn on
+dt<0, and add tests that pin the choice.
+'''

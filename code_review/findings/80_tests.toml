@@ -1,0 +1,2638 @@
+# Test suites
+#
+# Curated code-review findings. One [[finding]] per defect.
+# `anchor` is a literal piece of the offending line; the report re-locates it on
+# every build, so line numbers never go stale. See code_review/README.md for the
+# field reference and how findings are marked fixed.
+
+[[finding]]
+id = "TAD-101"
+title = "Test CONTACT (0.75) has drifted from DWA's CONTACT (0.875); hazard 'no collision' accepts footprint violations"
+severity = "high"
+category = "tests"
+file = "tests/astar_dwa_integration_test.py"
+anchor = "CONTACT = ROBOT_RADIUS + CELL_RADIUS  # 0.75 m"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 36
+what = '''
+dwa.py L27 defines CONTACT = ROBOT_RADIUS + CELL_RADIUS*1.25 = 0.875, while the integration
+suites hard-code 0.75: astar L36, dstar L33, warehouse_map_test L317. The hazard-collision
+checks (astar L297, dstar L337, warehouse L388) use the smaller value.
+'''
+why = '''
+Robots that get closer to the hazard than DWA's own contact envelope still pass 'no collision'.
+The yield tests therefore cannot detect that DWA is violating its own safety margin.
+'''
+evidence = '''
+python -c 'import navi_bot.planners.dwa as d; print(d.CONTACT)' -> 0.875. python
+code_review/evidence/reviewer-scripts/tests_integration/clearance_probe.py reconstructs the 0.1
+s sub-steps: astar #4 min_hazard_clear=0.833, dstar #4 min_hazard_clear=0.820, warehouse #7
+0.878, #8 0.883. All are below or about equal to 0.875, and all PASS.
+'''
+hint = '''
+Import CONTACT (and ROBOT_RADIUS) from navi_bot.planners.dwa instead of duplicating them.
+'''
+
+[[finding]]
+id = "TAD-103"
+title = "Integration suites test hand-rolled follower loops, not the shipped PathFollower/RobotController"
+severity = "high"
+category = "tests"
+file = "tests/astar_dwa_integration_test.py"
+anchor = "def follow_path(dwa, grid, start, theta, waypoints,"
+symbol = "follow_path"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 101
+what = '''
+Six copy-pasted loops (astar follow_path/drive_with_hazard, dstar follow_path/drive_with_hazard,
+warehouse drive/drive_with_hazard) re-implement PathFollower.target. path_follower.py L10-12
+claims 'the integration tests can drive the very same implementation, so the follower that ships
+is the follower that gets tested', but no suite imports PathFollower. The loops also differ from
+production. Lookahead is 1.5 in astar follow_path and both drive_with_hazard copies in the
+astar/dstar suites, versus PathFollower's 1.0. Production calls DWA every 20 ms
+(robot_controller.py L62), the tests every 0.5 s. Production feeds LIDAR points (continuous,
+within 1.5 m, transformed by world_obstacles), the tests feed integer cell centres from the
+grid. Production has a safety governor (L203-210) and feeds last_cmd after governor scaling; the
+tests have no governor. The tests' initial heading is taken from the path, while production uses
+whatever /pose says. Production poses and paths are in world metres (x along columns), the tests
+use the x=row cell frame.
+'''
+why = '''
+A green integration run says nothing about the controller that ships: the lookahead, control
+rate, obstacle source, governor and frame are all different. Bugs specific to production (the 50
+Hz timing mismatch and the world-frame mismatch, reported separately) cannot surface.
+'''
+evidence = '''
+Grep: 'PathFollower' appears only in navi_bot/control/path_follower.py, robot_controller.py and
+robot_controller_test.py. Compare astar L102 lookahead=1.5 with path_follower.py L33
+lookahead=1.0.
+'''
+hint = '''
+Drive the integration tests through PathFollower (better: RobotController.control_loop with a
+simulated plant and LIDAR), and keep a single shared test helper.
+'''
+
+[[finding]]
+id = "TAD-109"
+title = "'DWA yield rule' acceptance tests still pass with the yield rule disabled"
+severity = "high"
+category = "tests"
+file = "tests/astar_dwa_integration_test.py"
+anchor = "'yielded': min_speed_near < yield_speed,"
+symbol = "drive_with_hazard"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 302
+what = '''
+The five moving-hazard tests (astar TEST 4/5, dstar TEST 4, warehouse TEST 7/8) say they are the
+'Acceptance test for the DWA yield rule'. With dwa.YIELD_RANGE patched to 0, the v_max cap at
+dwa.py L208-210 can never trigger, and all five still pass, with identical or almost identical
+clearances. The 'yielded' criterion is met by ordinary slowing: cornering, the braking_room
+limit, and mover rejection in score_trajectory.
+'''
+why = '''
+Deleting or breaking the yield rule would go unnoticed, so these tests give false confidence in
+exactly the behaviour they are named for.
+'''
+evidence = '''
+python code_review/evidence/reviewer-scripts/tests_integration/clearance_probe.py <suite> <n>
+noyield gives 'astar_dwa_integration_test #4 ... passed=True ... min_hazard_clear=0.833' (same
+as with yield on), '#5 passed=True', 'dstar #4 passed=True', 'warehouse #7 passed=True', '#8
+passed=True'.
+'''
+hint = '''
+Add a check that only the yield rule can satisfy (e.g. the robot stops at least YIELD_STANDOFF
+short of the mover's path while the mover is ahead), and confirm it fails with the rule
+disabled.
+'''
+
+[[finding]]
+id = "TDS-103"
+title = "D* tests 1-4 pass on ANY return value - only an exception can fail them"
+severity = "high"
+category = "tests"
+file = "tests/DStar_Lite_planner_test.py"
+anchor = "logger.info(\"Test None Start: Passed\\n\")"
+symbol = "test_none_start"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 67
+what = '''
+test_none_start/test_none_goal/test_invalid_start/test_invalid_goal (53-134) call plan() and
+return True unless it raises; the returned `path` is never inspected. A planner returning a
+bogus path for start=None or (-1,-1) would pass. The A* suite's equivalent tests require None.
+'''
+why = '''
+The input-validation contract of D* Lite is not tested at all.
+'''
+evidence = '''
+Read lines 65-68, 86-89, 107-110, 128-131: `path = d_star.plan(...)` followed by unconditional
+`return True`.
+'''
+hint = '''
+Assert `path is None` as the A* suite does.
+'''
+
+[[finding]]
+id = "TDS-107"
+title = "Optimality test passes although D* Lite uses diagonal cost 1.0 and a Manhattan heuristic"
+severity = "high"
+category = "tests"
+file = "tests/DStar_Lite_planner_test.py"
+anchor = "Manhattan). Any of those issues shows up here as a cost mismatch or"
+symbol = "test_path_optimality"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+also_reported = 1
+reviewed_line = 420
+what = '''
+The docstring (415-422) claims diagonal cost 1.0 or a Manhattan heuristic 'shows up here as a
+cost mismatch', but the 6 hand-picked cases (426-431) happen to yield optimal paths because
+successor tie-breaking prefers cardinal moves. The source has exactly both defects and TEST 10
+is green.
+'''
+why = '''
+False confidence on the property the test exists to guard.
+'''
+evidence = '''
+testruns log: 'Results: 13/13 passed'. Same reference/validate code over random grids
+(probe_dstar2.py) finds 7/295 non-optimal D* paths on 12x12 and 3/150 on 20x20.
+'''
+hint = '''
+Add seeded randomized differential cases against reference_shortest_cost, or a fixed case such
+as the 6x6 (5,2)->(1,1) counterexample.
+'''
+
+[[finding]]
+id = "TDS-108"
+title = "Replanning tests use one hand-built scenario each and miss a frequent replan failure"
+severity = "high"
+category = "tests"
+file = "tests/DStar_Lite_planner_test.py"
+anchor = "def test_replan_after_obstacle_appears():"
+symbol = "test_replan_after_obstacle_appears"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 463
+what = '''
+TEST 11-13 (463-582) each test one fixed map change on a clear 8x8 map. Nothing compares an
+incremental replan with a fresh plan/reference over varied changes, so the bug where plan()
+returns None for reachable goals after a change is not caught. TEST 11 also re-checks occupancy
+(line 493) that validate_path already checked, and does not forbid corner cuts or check the
+replan's cost.
+'''
+why = '''
+The core D* Lite feature (incremental replanning) is effectively untested.
+'''
+evidence = '''
+probe_replan3.py: same scenario type as TEST 11 (block one cell on the current path, replan) on
+random 10x10 grids -> 108/319 replans return None while reachable; suite still 13/13.
+'''
+hint = '''
+Add a seeded randomized differential test: plan, toggle cells / move start, replan, require
+validate_path(..., forbid_corner_cuts=True) and cost == reference_shortest_cost.
+'''
+
+[[finding]]
+id = "TKN-102"
+title = "Pose-update tests never check the arc endpoint; a wrong-direction turn passes all 8"
+severity = "high"
+category = "tests"
+file = "tests/kinematics_test.py"
+anchor = "def test_pose_arc_chord_length():"
+symbol = "test_pose_arc_chord_length"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 355
+what = '''
+TESTs 12-19 check only invariants: |chord| (16), dtheta = omega*dt (15), rotation-equivariance
+(17), mirror symmetry (19), straight-line cases (12-14). No test compares (dx, dy) to the
+closed-form arc endpoint, e.g. v=1, omega=1, dt=pi/2 from theta=0 -> (1, 1, pi/2). An
+implementation whose position moves along the MIRRORED arc (left turn displaces the robot to the
+right) while dtheta stays correct satisfies every one of these invariants.
+'''
+why = '''
+compute_pose_update feeds odometry/dead-reckoning; a sign error in the arc would put the
+estimated pose on the wrong side of the path while the suite stays 23/23 green.
+'''
+evidence = '''
+Mutation test: cd "/c/Users/evan8/Desktop/Navi Bot" && python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_control/mutant_kin.py
+monkeypatches compute_pose_update to use the mirrored turn for position (left turn
+v=1,w=1,dt=0.5 -> dy=-0.122) and runs TESTs 12-19 -> 'ALL POSE TESTS PASS ON MUTANT: True'.
+'''
+hint = '''
+Add closed-form endpoint checks: quarter circle (v=1, omega=1, dt=pi/2 -> dx=1, dy=1), a right
+turn (dy<0 for omega<0), pure rotation (v=0 -> dx=dy=0), and negative v (reverse arc).
+'''
+
+[[finding]]
+id = "TLD-105"
+title = "Costmap tests use x==y obstacles and re-derive row=int(x/res): axis swap can never fail"
+severity = "high"
+category = "tests"
+file = "tests/lidar_mock_test.py"
+anchor = "row = int(obs['centroid'][0] / resolution)"
+symbol = "test_update_costmap_multiple_obstacles"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 513
+what = '''
+Every update_costmap test places obstacles on the diagonal: (1.0,1.0) L428, (2.5,2.5) L451/L554,
+(1.0,1.0)/(3.0,3.0) L507-508, (0.05,0.05) L486. With x==y, an x->row vs x->col swap is
+invisible. Test 20 (L513-514) also computes the expected cell with the same formula as the
+implementation (row=int(x/res), col=int(y/res)), so it mirrors the code rather than checking it,
+and it locks in x->row. No test uses a non-zero map origin, a robot pose, or a negative
+(behind-the-robot) coordinate.
+'''
+why = '''
+The rest of the project uses world x -> column, y -> row (utils/geometry.world_to_grid, which
+geometry_test pins). The costmap suite gives false confidence that the costmap agrees with the
+planners. In fact it is transposed, ignores map origin and robot pose, and drops half the scan
+(see the lidar_processing.py findings).
+'''
+evidence = '''
+python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_sensors/lidar_probe.py:
+obstacle (x=1.0,y=3.0) -> 'cell[row10,col30]= 100 cell[row30,col10]= 0' (x went to the row).
+Obstacle (-1.0,1.0) -> 'cells marked: 0'. Both pass the current suite unnoticed.
+'''
+hint = '''
+Use asymmetric centroids (e.g. x=1.0, y=3.0) and assert the cell from geometry.world_to_grid(x,
+y, origin, res). Add cases with a non-zero origin, a robot pose and negative coordinates.
+'''
+
+[[finding]]
+id = "TSM-101"
+title = "Transitions are forced by writing private fields instead of public inputs/timers"
+severity = "high"
+category = "tests"
+file = "tests/state_machine_test.py"
+anchor = "def fire(sm):"
+symbol = "fire"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 35
+what = '''
+Every test past IDLE drives the machine by assigning private state: is_at_goal (TESTs 14,
+16-22), pickup_complete (17, 19-22), delivery_complete (21, 22), battery_level (8, 23-27),
+current_state (23-27) and current_mission (24-27). No test publishes on /nav_status through the
+bus or fires the timer callbacks that the mock keeps in sm._timers. TEST 16 only checks the
+private _pickup_timer_started flag, not that a timer with the right period/callback was created.
+'''
+why = '''
+Behaviour reachable only via private writes is what is tested; the real input paths (nav_status,
+timers, battery source) and their bugs (missing delivery goal, periodic timers, no battery
+input) go untested.
+'''
+evidence = '''
+Read the test bodies listed; the full-suite run logs: state_machine_test.log 35/35 passed.
+'''
+hint = '''
+Drive tests through a fake nav node publishing String on /nav_status and by invoking
+sm._timers[i].callback(); assert on published goals/states.
+'''
+
+[[finding]]
+id = "TSM-103"
+title = "No test checks a goal is published for the delivery leg"
+severity = "high"
+category = "tests"
+file = "tests/state_machine_test.py"
+anchor = "# Now in DELIVERY_NAV"
+symbol = "test_delivery_nav_at_goal_transitions_to_delivering"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 447
+what = '''
+TEST 13 checks the pickup goal; no test inspects goal_pub after entering DELIVERY_NAV. TESTs
+19-22 reach DELIVERING by writing sm.is_at_goal = True, so the missing delivery goal (robot
+never sent anywhere) is invisible.
+'''
+why = '''
+The suite is 35/35 green while the delivery leg cannot function.
+'''
+evidence = '''
+Read lines 405-456; grep 'delivery' in the test file only finds make_mission's default and
+delivery_complete.
+'''
+hint = '''
+Add: after PICKED_UP -> DELIVERY_NAV, goal_pub.last_msg must equal delivery_location.
+'''
+
+[[finding]]
+id = "TWN-104"
+title = "Waypoint-nav loop has no collision check; robot drives through an obstacle and the test passes"
+severity = "high"
+category = "tests"
+file = "tests/waypoint_nav_test.py"
+anchor = "result = pursuit.pure_pursuit(path, current_pose_tuple)"
+symbol = "navigate_to_waypoint"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 157
+what = '''
+navigate_to_waypoint (L124-185) only checks distance to goal. Nothing compares the odometry pose
+against the grid, so a trajectory through walls counts as success. Pure pursuit has no obstacle
+awareness, so the only thing keeping it off walls is the A* path. TEST 7 really does go through
+a wall (mission M012, see the pursuit-index finding).
+'''
+why = '''
+Every waypoint_nav test reports PASS whatever route the robot drives. 'Obstacle avoidance across
+multiple missions' (TEST 4/7 docstrings) is claimed but never checked.
+'''
+evidence = '''
+python code_review/evidence/reviewer-scripts/tests_integration/wp_probe2.py (wraps
+WheelOdometry.update): 'M012: pose (7.59,11.54) inside occupied cell (8,12)', 'M012: pose
+(7.52,11.61) inside occupied cell (8,12)', then 'result True'. wp_probe.py:
+test_long_running_multi_waypoint_route passed=True min_clear_to_obstacle_centre=0.614
+poses_in_occupied_cell=2.
+'''
+hint = '''
+After each odometry update, assert that the robot footprint (radius + half-cell) does not
+overlap an occupied cell, and fail the leg if it does.
+'''
+
+[[finding]]
+id = "TWN-105"
+title = "'End-to-end' waypoint test skips RobotController/DWA/PathFollower and fakes every state-machine trigger"
+severity = "high"
+category = "tests"
+file = "tests/waypoint_nav_test.py"
+anchor = "sm.is_at_goal = True"
+symbol = "run_mission"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 245
+what = '''
+The suite's docstring claims a full mission flow. In fact it (a) drives with
+PurePursuitController plus a hand-rolled wheel loop, while production drives with
+RobotController -> PathFollower -> DWA (robot_controller.py L182-197). (b) It sets sm.is_at_goal
+= True directly (L245, L276) instead of waiting for RobotController to publish 'goal_reached' on
+/nav_status. It does this even after a leg FAILED, because L245 runs unconditionally. (c) It
+sets pickup_complete/delivery_complete directly (L248, L279) instead of letting the timers fire.
+(d) It calls planner.current_pose_callback/goal_callback directly instead of publishing on the
+bus (publish_pose/publish_goal, L92-111). (e) It reads planner.current_path, the planner's
+internal grid-cell path, rather than the /planned_path message in world metres. (f) It ignores
+the /goal_pose that StateMachine publishes and injects its own swapped goal.
+'''
+why = '''
+None of these production links is exercised: /goal_pose from StateMachine -> planner,
+/planned_path -> RobotController.path_callback, RobotController -> /nav_status ->
+StateMachine.nav_status_callback, the safety governor, and the 'goal_reached' loop closure. Two
+real state-machine bugs survive as a result: the transposed pickup goal and the delivery goal
+that is never published (separate findings).
+'''
+evidence = '''
+Read L124-289: RobotController, PathFollower and DWAPlanner are never imported (grep finds
+PathFollower/RobotController only in robot_controller.py and robot_controller_test.py). The
+wp_probe.py goal_callback trace for TEST 4 is [(1.0, 1.0), (1, 1), (18.0, 1.0), ...]. The
+integer pair is StateMachine's own publish, and the test's manual publish_goal overrides it.
+'''
+hint = '''
+Build the loop around RobotController: publish the goal through StateMachine, let
+PathPlannerNode publish /planned_path, step control_loop on a simulated plant, and wait for
+'goal_reached' on /nav_status. Do not assign the state-machine flags directly.
+'''
+
+[[finding]]
+id = "TAD-102"
+title = "Large copy-paste across integration suites (helpers, maps, follower loops, reporters, runner, constants)"
+severity = "medium"
+category = "duplication"
+file = "tests/astar_dwa_integration_test.py"
+anchor = "def corner_cut_segments(path, grid):"
+symbol = "corner_cut_segments"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 56
+what = '''
+corner_cut_segments, min_clearance and path_is_robot_safe (astar L56-96, dstar L57-99);
+obstacle_map (astar L41, dstar L42); follow_path (astar L101, dstar L104); drive_with_hazard
+(astar L227, dstar L262, warehouse L320); report_hazard (astar L307, dstar L347); the warehouse
+drive (L215); the ROBOT_RADIUS/CELL_RADIUS/CONTACT constants; and the identical main() runner in
+all 5 files. The copies have already diverged: lookahead 1.0 vs 1.5, 'HAZARD' vs 'HAZPRED',
+dstar's path_is_robot_safe gaining extra checks (length, occupied cell) that the astar copy
+lacks, and a 'left map' warning logged in some copies but not others.
+'''
+why = '''
+Fixes land in one copy and not the others; the CONTACT drift and the HAZPRED tag bug are both
+symptoms of this.
+'''
+evidence = '''
+Read the files side by side.
+'''
+hint = '''
+Extract a tests/sim_helpers.py (follower sim, hazard drive, safety checks, telemetry, runner),
+built on PathFollower and dwa constants.
+'''
+
+[[finding]]
+id = "TAD-105"
+title = "Static collision check only tests whether the robot centre is inside an occupied cell"
+severity = "medium"
+category = "tests"
+file = "tests/astar_dwa_integration_test.py"
+anchor = "r, c = int(round(x)), int(round(y))"
+symbol = "follow_path"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 148
+what = '''
+Every follower loop flags a collision only when round(x), round(y) lands in an occupied cell,
+i.e. when the centre comes within about 0.5 of the obstacle centre (axis-aligned). It ignores
+the 0.25 robot radius and the 0.75/0.875 contact envelope, and checks only at 0.1 s sub-steps.
+Same code in astar L294, dstar L142/L334, warehouse L256/L384.
+'''
+why = '''
+A robot whose body overlaps a shelf or wall (centre 0.5-0.75 from the cell centre) is reported
+collision-free. Today the trajectories keep ≥0.97 clearance, so nothing is masked yet, but the
+check would not catch a regression.
+'''
+evidence = '''
+Read the code. clearance_probe.py shows that current passing runs have min_static_clear
+0.974-1.349.
+'''
+hint = '''
+Check footprint distance to the occupied cells (distance < CONTACT, imported from dwa) at every
+sub-step.
+'''
+
+[[finding]]
+id = "TAD-106"
+title = "Dashboard telemetry protocol (MAP/MAPROW/pose=/hazard at/HAZPRED/CLOUD) is undocumented, untested and fragile"
+severity = "medium"
+category = "design"
+file = "tests/astar_dwa_integration_test.py"
+anchor = "logger.warning(f\"Collision at cell ({r}, {c}), pose=({x:.2f},{y:.2f})\")"
+symbol = "follow_path"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 150
+what = '''
+The dashboard extracts trails with loose regexes: pose=\(..\) anywhere in a line (index.html
+L568) and 'hazard at (r,c)' (L579), and assumes they line up 1:1 with CLOUD lines. The suites
+emit extra matching lines: collision warnings containing 'pose=(..)' (astar L150/L153, dstar
+L144, warehouse L258/L386), 'Collision with hazard at (..)' (warehouse L389), and waypoint_nav
+summary lines 'reached pickup ... pose=(..)' (L240/L271). DWA logs CLOUD only on some calls
+(none when it returns early or has no candidates), and the final pose is logged with no CLOUD.
+No test or document pins the format, and the MAP/MAPROW emitter is copy-pasted 7 times.
+'''
+why = '''
+Extra or missing lines shift the pose, hazard and cloud trails relative to each other, so the
+dashboard can animate the hazard or cloud against the wrong robot pose. Any wording change in a
+log line silently breaks visualisation.
+'''
+evidence = '''
+Read index.html L515-598 and the emitters listed. Grep shows 'MAPROW' emitted in 7 places across
+5 test files.
+'''
+hint = '''
+Move telemetry into one helper module with documented, uniquely-tagged lines (e.g. 'TLM pose x
+y'), and add a small round-trip test for the parser.
+'''
+
+[[finding]]
+id = "TAD-108"
+title = "'yield_speed' is really a per-0.5 s displacement and is satisfied by any slowdown near the hazard"
+severity = "medium"
+category = "tests"
+file = "tests/astar_dwa_integration_test.py"
+anchor = "min_speed_near = min(min_speed_near, math.hypot(x - px, y - py))"
+symbol = "drive_with_hazard"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 274
+what = '''
+min_speed_near holds the displacement over one 0.5 s cycle, so yield_speed=0.2 actually means
+0.4 cells/s. It is sampled whenever the hazard is within 2.0 and i>0, so accelerating from rest,
+turning at a corner or slowing for static obstacles all count as 'yielding'. min_dist is also
+sampled only at cycle starts (L271-272), not at the sub-steps. The same logic is copied into
+dstar L313-314 and warehouse L361-362.
+'''
+why = '''
+The pass criterion is looser than its name suggests, and the reported 'closest' distance
+overstates the real clearance (astar #5 reports closest 1.15, while the sub-step minimum is
+1.011).
+'''
+evidence = '''
+Read the code. Saved log astar TEST 5: 'closest 1.15'. clearance_probe.py astar #5:
+min_hazard_clear=1.011.
+'''
+hint = '''
+Divide by the cycle time to get a real speed, sample per sub-step, and require the slowdown to
+happen while the mover is ahead and inside the yield cone.
+'''
+
+[[finding]]
+id = "TAS-103"
+title = "Helpers named test_* break pytest collection; the A* one is dead code"
+severity = "medium"
+category = "tests"
+file = "tests/AStar_planner_test.py"
+anchor = "def test_goal_callback(x, y):"
+symbol = "test_goal_callback"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 32
+what = '''
+test_goal_callback in the A* (32), D* (24) and DWA (35) suites is a helper, not a test; the A*
+version is never called. Under pytest (declared via setup.py tests_require=['pytest'] and
+package.xml python3-pytest) each is collected and errors with a missing fixture.
+'''
+why = '''
+pytest/colcon test runs report 3 errors; confusing names.
+'''
+evidence = '''
+python -m pytest -p no:cacheprovider tests/AStar_planner_test.py
+tests/DStar_Lite_planner_test.py tests/DWA_planner_test.py tests/path_planner_test.py -> 'ERROR
+tests/AStar_planner_test.py::test_goal_callback' (same for D* and DWA), '57 passed, 57 warnings,
+3 errors'.
+'''
+hint = '''
+Rename the helpers (e.g. random_free_cell) and delete the unused A* one.
+'''
+
+[[finding]]
+id = "TAS-107"
+title = "Under pytest every check in these suites passes even when it returns False"
+severity = "medium"
+category = "tests"
+file = "tests/AStar_planner_test.py"
+anchor = "results = [t() for t in selected]"
+symbol = "main"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 589
+what = '''
+All test functions signal failure with `return False` instead of assert/raise. pytest (declared
+as the test dependency in setup.py/package.xml) ignores return values (only
+PytestReturnNotNoneWarning), so a completely broken planner is green. Applies to all four files.
+'''
+why = '''
+Anyone running pytest or colcon test gets a false green.
+'''
+evidence = '''
+Scratch pytest_probe_test.py monkeypatches AStarPlanner.plan to `lambda self, s, g: None` and
+imports test_straight_line_clear and test_path_optimality -> '2 passed in 0.33s'.
+'''
+hint = '''
+Use assert (works for both the custom runner and pytest), or keep pytest from collecting these
+files.
+'''
+
+[[finding]]
+id = "TDD-101"
+title = "D* 'replan' tests teleport the robot and plan from scratch; nothing replans mid-drive"
+severity = "medium"
+category = "tests"
+file = "tests/dstar_dwa_integration_test.py"
+anchor = "new_start = tuple(path1[min(2, len(path1) - 2)])"
+symbol = "test_dstar_replan_after_obstacle_appears"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 209
+what = '''
+TEST 2 never drives path1. It picks waypoint 2 as a new start, changes the map, calls plan()
+again, and only then starts a fresh DWA run on the finished path2. TEST 3 does the same with the
+start unchanged. The mid-drive replanning in drive_with_hazard is commented out (L298-303).
+Nothing checks that the second plan is incremental (reuses state) rather than a full replan.
+'''
+why = '''
+D* Lite's distinctive feature, replanning while the robot moves on a changed map, is not
+exercised end to end, despite the module docstring calling it 'the signature scenario'.
+'''
+evidence = '''
+Read L192-257 and L298-303.
+'''
+hint = '''
+Drive along path1, inject the obstacle once it is perceived, replan from the current pose with
+the same planner instance, and switch the follower to the new path.
+'''
+
+[[finding]]
+id = "TDD-103"
+title = "D* suite emits 'HAZARD' instead of 'HAZPRED', so the dashboard never shows its hazard forecast"
+severity = "medium"
+category = "bug"
+file = "tests/dstar_dwa_integration_test.py"
+anchor = "logger.debug(\"HAZARD \" + \" \".join(f\"{hz[0] + vr*k:.2f},{hz[1] + vc*k:.2f}\" for k in range(1, 6)))"
+symbol = "drive_with_hazard"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 310
+what = '''
+The A* and warehouse suites log 'HAZPRED x,y ...', which the dashboard parses
+(telemetry_dashboard/index.html L598: inferPointCloud(lines,'HAZPRED')). The D* copy logs
+'HAZARD ...', which nothing parses, and index.html L1264 does not filter it from terminal text
+either.
+'''
+why = '''
+The D* moving-hazard run shows no predicted-path cloud, and the forecast lines leak into the
+terminal view. This is a silent consequence of the copy-paste duplication.
+'''
+evidence = '''
+Grep: 'HAZPRED' appears in astar L270, warehouse L358 and index.html L586/598/1264; 'HAZARD '
+appears only in dstar L310.
+'''
+hint = '''
+Use the same tag, ideally from a shared telemetry helper.
+'''
+
+[[finding]]
+id = "TDS-101"
+title = "Unseeded random start/goal in D* tests 7-9 and DWA tests 4/6"
+severity = "medium"
+category = "tests"
+file = "tests/DStar_Lite_planner_test.py"
+anchor = "idx = np.random.randint(0, len(free_cells))"
+symbol = "test_goal_callback"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 29
+what = '''
+get_start_callback/test_goal_callback in DStar_Lite_planner_test.py (24-38) and
+DWA_planner_test.py (21-47) use np.random without a seed, so every run tests different cases and
+a failure cannot be replayed. D* tests 7-9 also allow start == goal (1/64 on the clear map),
+making the case trivial.
+'''
+why = '''
+Non-reproducible results; a rare failure would look like flakiness and could not be replayed.
+'''
+evidence = '''
+probe_flaky.py with seeds 0-149 (DWA) / 0-199 (D*): DWA4 0 fails, DWA6 0 fails, D7/D8/D9 0 fails
+- not flaky today, but non-deterministic by construction.
+'''
+hint = '''
+Use a seeded np.random.default_rng(seed) and log the seed, or fixed case lists; exclude start ==
+goal.
+'''
+
+[[finding]]
+id = "TDS-102"
+title = "path_is_valid ignores endpoints, adjacency and corner cuts"
+severity = "medium"
+category = "tests"
+file = "tests/DStar_Lite_planner_test.py"
+anchor = "if row < 0 or row >= grid.shape[0] or col < 0 or col >= grid.shape[1] or grid[row, col] == 1:"
+symbol = "path_is_valid"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 48
+what = '''
+Used by TEST 7-9; it only checks that cells are in bounds and not ==1. A path that teleports,
+starts elsewhere, or does not end at goal is 'valid'. It checks ==1 instead of !=0 unlike the
+rest of the code. validate_path (390) in the same file already does this properly.
+'''
+why = '''
+TEST 7-9 can pass with structurally broken paths.
+'''
+evidence = '''
+Read lines 40-50 and 390-409.
+'''
+hint = '''
+Delete path_is_valid and use validate_path(path, grid, start, goal, forbid_corner_cuts=True).
+'''
+
+[[finding]]
+id = "TDS-105"
+title = "'Moving map' test changes the map after planning and never replans"
+severity = "medium"
+category = "tests"
+file = "tests/DStar_Lite_planner_test.py"
+anchor = "d_star.set_occupancy_grid(map2)"
+symbol = "test_random_coords_on_moving_map"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 259
+what = '''
+TEST 9 plans on map1, calls set_occupancy_grid(map2), then validates the OLD path against map1
+(line 260). No plan() runs after the change, so D* Lite's handling of a changed map is not
+exercised.
+'''
+why = '''
+Test name and log claim dynamic-map coverage that does not exist.
+'''
+evidence = '''
+Read lines 257-265.
+'''
+hint = '''
+Replan after setting map2 and validate the new path against map2, or delete the test now that
+11-13 exist.
+'''
+
+[[finding]]
+id = "TDS-106"
+title = "Maps, reference Dijkstra, validators and runner copy-pasted across planner suites"
+severity = "medium"
+category = "duplication"
+file = "tests/DStar_Lite_planner_test.py"
+anchor = "def reference_shortest_cost(grid, start, goal):"
+symbol = "reference_shortest_cost"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 345
+what = '''
+reference_shortest_cost/path_cost/validate_path are duplicated verbatim in AStar_planner_test.py
+(388-452) and DStar_Lite_planner_test.py (345-409); clear_map/blocked_map/obstacle_map are
+copied into all four files; main() is copied four times. DWA_planner_test.py also carries unused
+obstacle_map/obstacle_map2 (390-418).
+'''
+why = '''
+Fixes to the reference model or maps must be made in several places and will drift.
+'''
+evidence = '''
+Compare the cited ranges: identical text.
+'''
+hint = '''
+Move maps, reference model and runner into a shared tests helper module.
+'''
+
+[[finding]]
+id = "TDW-101"
+title = "'Commands within limits' never checks the dynamic window (acceleration limits)"
+severity = "medium"
+category = "tests"
+file = "tests/DWA_planner_test.py"
+anchor = "if best_vel >= dwa.min_vel_x and best_vel <= dwa.max_vel_x:"
+symbol = "dwa_is_valid"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 53
+what = '''
+dwa_is_valid only checks static bounds [min_vel_x, max_vel_x] and |omega| <= max_vel_theta. The
+defining DWA constraint (each new (v, omega) within +/- max_accel * control_period of the
+previous command) and the braking-admissibility check are never verified, although
+navigate_closed_loop holds the previous (v, om).
+'''
+why = '''
+A planner that ignored compute_dynamic_window would still pass every DWA test.
+'''
+evidence = '''
+Read lines 49-56 and 83-90; dwa.py compute_dynamic_window 278-309.
+'''
+hint = '''
+In navigate_closed_loop also assert |v - v_prev| <= max_accel_x*0.5 and |om - om_prev| <=
+max_accel_theta*0.5 (+eps).
+'''
+
+[[finding]]
+id = "TDW-103"
+title = "Closed-loop collision check ignores the robot radius"
+severity = "medium"
+category = "tests"
+file = "tests/DWA_planner_test.py"
+anchor = "r, c = int(round(x)), int(round(y))"
+symbol = "navigate_closed_loop"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 97
+what = '''
+A collision is flagged only when the robot CENTER rounds into an occupied cell; ROBOT_RADIUS
+(0.25) and the planner's CONTACT distance (0.875) are ignored, so a pose 0.55 cells from an
+obstacle centre (body overlapping it) counts as collision-free. The out-of-map check likewise
+uses +/-0.5 while the planner uses 0.5 - ROBOT_RADIUS.
+'''
+why = '''
+TEST 5's 'steered around the obstacle' can pass with the body clipping the obstacle.
+'''
+evidence = '''
+Read lines 95-104 vs dwa.py ROBOT_RADIUS/CONTACT (21, 27) and score_trajectory 324-327.
+'''
+hint = '''
+Check the distance from the pose to each occupied cell (as a square) against ROBOT_RADIUS.
+'''
+
+[[finding]]
+id = "TDW-105"
+title = "DWA 'fully blocked map' test only re-tests a None pose"
+severity = "medium"
+category = "tests"
+file = "tests/DWA_planner_test.py"
+anchor = "start = get_start_callback(map1)"
+symbol = "test_fully_blocked"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 192
+what = '''
+On blocked_map get_start_callback returns None (no free cells), so current_pose and goal are
+None and plan() returns None from its None-pose guard; the obstacles are never considered. With
+a real pose the planner returns (0.0, 0.0), not None, so the test's expectation does not match
+planner behaviour either. The obstacle loop at 211-214 has no effect (it only `continue`s).
+'''
+why = '''
+TEST 3 duplicates TEST 1 and gives false confidence about blocked-map behaviour.
+'''
+evidence = '''
+probe_misc.py: 'DWA blocked: start from callback = None goal = None'; 'DWA real blocked plan
+(pose (3,3,0), goal (6,6)) -> (0.0, 0.0)'.
+'''
+hint = '''
+Use a fixed in-map pose and goal with obstacles surrounding the robot and assert the intended
+contract (a (0,0) stop command).
+'''
+
+[[finding]]
+id = "TIM-101"
+title = "IMU spec is inconsistent about gravity: raw 9.8 m/s^2 fed in, but detect_motion assumed gravity-free"
+severity = "medium"
+category = "tests"
+file = "tests/imu_test.py"
+anchor = "result = imu.process_imu_data(make_imu_msg(gyro_z=0.5, accel=(0.1, 0.0, 9.8)))"
+symbol = "test_process_imu_data_returns_dict"
+source = "reviewer"
+confidence = "confirmed"
+known_wip = true
+reviewed_line = 124
+what = '''
+Test 4 feeds raw accelerometer data containing gravity (z=9.8). Test 8 sets linear_acceleration
+to gravity-free values (0.02,0,0) and expects detect_motion(threshold=0.1) to be False. Nothing
+in the spec or pipeline removes gravity: accel_bias is not a gravity model, and calibrate is a
+no-op. With real data a stationary robot has |a| ~ 9.8, so detect_motion (imu_processor.py
+L135-136) always reports motion.
+'''
+why = '''
+Implementing to the spec yields a motion detector that is always True on a real IMU, and the
+tests would still pass.
+'''
+evidence = '''
+Reading imu_test L124, L215-218 and imu_processor.py L77-80, L129-136: no gravity subtraction
+anywhere.
+'''
+hint = '''
+State in the spec whether linear_acceleration is gravity-compensated. Make detect_motion compare
+|a| - g (or the deviation from the calibrated stationary vector), and add a test with a
+stationary 9.81 z reading.
+'''
+
+[[finding]]
+id = "TKN-101"
+title = "Clipping test only checks |wheel| <= max, accepting clipping that destroys the commanded turn"
+severity = "medium"
+category = "tests"
+file = "tests/kinematics_test.py"
+anchor = "cases = [(5.0, 0.0), (0.0, 500.0), (10.0, 100.0)]"
+symbol = "test_ik_clipping_never_exceeds_limit"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 131
+what = '''
+TEST 5 asserts only that each wheel is within max_v. Case (10.0, 100.0) (R = 0.1 m forward arc)
+comes out as wheels (-1, +1): a pure spin in place with v = 0. No test checks that saturation
+preserves the commanded curvature (v/omega) or at least the direction of motion; the per-wheel
+clip behaviour is effectively blessed as correct.
+'''
+why = '''
+A saturated command silently becomes a different manoeuvre (turning disappears or becomes a
+spin); the test gives false confidence that IK saturation is handled.
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_control/repro1.py
+-> 'cmd v=10.0 w=100.0 R=0.100 -> wheels (-1.000,1.000) -> v=0.000 w=5.000 R=0.000' and 'cmd
+v=1.5 w=1.0 R=1.500 -> wheels (1.000,1.000) -> v=1.000 w=0.000 R=inf'.
+'''
+hint = '''
+Add an invariant test: after saturation, forward_kinematics(IK(v, w)) must keep the same v/omega
+ratio (same turn radius) and signs, with the speed scaled down.
+'''
+
+[[finding]]
+id = "TKN-103"
+title = "TEST 20 re-implements the source formula instead of checking against IK, so it is tautological"
+severity = "medium"
+category = "tests"
+file = "tests/kinematics_test.py"
+anchor = "raw_v_l = v - (omega * robot.L / 2.0)"
+symbol = "test_validate_consistent_with_ik"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 460
+what = '''
+The docstring says validate_velocities must agree with 'directly checking IK output', but lines
+460-462 copy the exact formula used inside validate_velocities (kinematics.py 106-110) rather
+than calling inverse_kinematics. Any error shared by both copies (e.g. wrong L/2 factor, wrong
+unit for max_v) passes. It also duplicates max_v = max_wheel_speed * r (line 456, also in TEST 5
+line 130).
+'''
+why = '''
+The test proves only that two copies of the same expression agree; it cannot catch a wrong
+feasibility formula.
+'''
+evidence = '''
+Read: tests/kinematics_test.py 459-462 vs navi_bot/control/kinematics.py 106-110 - identical
+expressions.
+'''
+hint = '''
+Check against independent ground truth: hand-computed feasible/infeasible cases near the
+boundary (e.g. v = max_v exactly, v = max_v + eps, omega*L/2 = max_v), or compare against
+unclipped IK from an uncapped robot.
+'''
+
+[[finding]]
+id = "TLD-103"
+title = "detect_obstacles fixtures sit only in the regime that works (<=3 m, >=17 beams)"
+severity = "medium"
+category = "tests"
+file = "tests/lidar_mock_test.py"
+anchor = "ranges[262:280] = 3.0"
+symbol = "test_detect_obstacles_two_separate_clusters"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 301
+what = '''
+All clustering fixtures place 17-18 beams at 1.0-3.0 m (L192, L221, L249-252, L299, L301). The
+9.0 m 'background' (clear_scan L37, L190, L220...) is converted to points (9.0 < max_range) but
+is silently classified as noise. No test places an obstacle beyond ~3.4 m, a thin obstacle (<10
+beams), or a long wall, and no test checks that a background wall IS detected.
+'''
+why = '''
+The suite is 22/22 green while the detector misses everything past 3.4 m and every thin
+obstacle.
+'''
+evidence = '''
+python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_sensors/lidar_probe.py:
+'background ring at 9.0 m (test fixture) forms a cluster? 0'; a 10-beam arc at 3.5-9.0 m -> 0
+clusters.
+'''
+hint = '''
+Add cases for an obstacle at 5-8 m, a 5-6 beam object at 1 m, and a wall. Use inf for the
+background in clustering tests so 'no obstacle' is explicit.
+'''
+
+[[finding]]
+id = "TMC-101"
+title = "TEST 3 asserts the derivative kick on the first update as the expected behaviour"
+severity = "medium"
+category = "tests"
+file = "tests/motion_controller_test.py"
+anchor = "out1 = pid.update(1.0, 0.5)   # (1.0 - 0.0) / 0.5 = 2.0"
+symbol = "test_pid_derivative"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 60
+what = '''
+PIDController starts with prev_error=0.0, so the first update computes d = (error - 0)/dt. TEST
+3 explicitly expects that spike (out1 = 2.0). In MotionController this kick saturates the first
+linear command for any goal: goal 0.5 m away at dt=0.02 gives a D contribution of 0.1*0.5/0.02 =
+2.5 m/s (clipped to 1.0).
+'''
+why = '''
+The suite locks in a known PID anti-pattern (derivative kick), so fixing it would make the test
+fail; real robot gets a full-speed jerk on every new goal.
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_control/repro1.py
+-> 'first v 1.0 linear d-term contrib 2.5'.
+'''
+hint = '''
+Skip the derivative on the first update (or use derivative-on-measurement) and change TEST 3 to
+expect 0 derivative on the first call.
+'''
+
+[[finding]]
+id = "TMC-103"
+title = "Goal-behind test accepts the robot driving forward, away from the goal"
+severity = "medium"
+category = "tests"
+file = "tests/motion_controller_test.py"
+anchor = "if not (v_behind < v_aligned):"
+symbol = "test_sharp_turn_slows_down"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 182
+what = '''
+For a goal directly behind, compute_control returns v=+0.5 m/s with omega=2.0: the robot drives
+AWAY from the goal at half speed while turning. TEST 10 only asserts v_behind < v_aligned and
+omega != 0. Both v values are also just the 1.0 output clip (derivative kick) and its half, so
+the comparison says nothing about the slow-down law.
+'''
+why = '''
+Encodes 'drive away from the goal while turning' as acceptable; a heading error of pi should
+give v<=0 or a rotate-in-place.
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_control/repro1.py
+-> 'goal behind cmd (np.float64(0.5), np.float64(2.0))'.
+'''
+hint = '''
+Assert v <= 0 (or ~0) when |heading_error| > pi/2, and test the slow-down with values not
+saturated by the output clip.
+'''
+
+[[finding]]
+id = "TMP-101"
+title = "'Latched' delivery is never tested: the mock has no latching and the test calls the callback directly"
+severity = "medium"
+category = "tests"
+file = "tests/map_publisher_test.py"
+anchor = "planner.map_callback(pub.map_pub.last_msg)"
+symbol = "test_end_to_end_into_path_planner"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 145
+what = '''
+The module docstring claims to pin 'the latched QoS'. TEST 4 only compares qos.durability with a
+string constant. TEST 5 builds the publisher BEFORE the planner and then calls
+planner.map_callback(...) by hand, because MockPublisher does not replay to late subscribers. No
+test calls rclpy.init(), so bus registrations accumulate across tests.
+'''
+why = '''
+The scenario latching exists for (a node subscribing after the publish) is never exercised, and
+nothing checks that RobotController.map_callback also receives the map.
+'''
+evidence = '''
+Read mock_ros2.py L117-135 (publish delivers only to current subscribers, no history replay) and
+map_publisher_test L106-151.
+'''
+hint = '''
+Give the mock publisher a transient-local replay on subscribe, and test the late-joiner case
+through the bus for both PathPlannerNode and RobotController.
+'''
+
+[[finding]]
+id = "TMP-102"
+title = "End-to-end map test checks only flip-invariant cells, so a double flip or orientation slip goes unnoticed"
+severity = "medium"
+category = "tests"
+file = "tests/map_publisher_test.py"
+anchor = "if grid[0][0] != 1:"
+symbol = "test_end_to_end_into_path_planner"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 158
+what = '''
+The corner cell (0,0) is a wall under any flip or transpose. The pickup_1 check at (18,60) is
+also passed by a vertically flipped map, because row 181 (y≈9.05) is in the free delivery zone.
+Only the 2x2 unit test (TEST 2) pins orientation. Warehouse TEST 2's station check is similarly
+invariant under a vertical flip. (18,60) is a magic duplicate of the STATIONS table.
+'''
+why = '''
+A consumer that flips again, or a publisher whose flip is applied twice, would deliver an
+upside-down map to the planners with every map test still green.
+'''
+evidence = '''
+Reasoning from generate_map.built_in_layout: stations sit at y=0.9 and y=9.0/9.1 with keep-outs,
+and boxes are scattered only at x≥1.55. A vertical flip maps every station into free space.
+python code_review/evidence/reviewer-scripts/tests_integration/flip_pgm_probe.py on good[::-1]:
+'stations free in flipped map: True', 'border walled in flipped: True', 'flipped[0][0]= 1
+flipped[18][60]= 0' (all of these checks pass on an upside-down map); the transposed map does
+fail: 'stations free in transposed map: False'.
+'''
+hint = '''
+Assert an asymmetric feature, e.g. a shelf cell that is occupied at (row for y=3.0, col for
+x=1.0) but free at the vertically mirrored row.
+'''
+
+[[finding]]
+id = "TOD-101"
+title = "Arc test checks only signs, so the 2x lateral integration error passes"
+severity = "medium"
+category = "tests"
+file = "tests/odometry_test.py"
+anchor = "if not (theta > 0 and y > 0 and x > 0):"
+symbol = "test_arc_curves_toward_faster_wheel"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 121
+what = '''
+Test 5 is the only motion test with simultaneous translation and rotation, and it asserts only
+theta>0, y>0, x>0. Tests 2-4 are pure straight or pure rotation, where the heading-ordering bug
+is invisible.
+'''
+why = '''
+The odometry suite is 10/10 green while arc integration is off by 100% in y.
+'''
+evidence = '''
+python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_sensors/odom_probe.py
+(see odometry.py finding): y=0.1032 vs exact 0.0517; both satisfy y>0.
+'''
+hint = '''
+Assert x,y against the closed-form arc (R*sin(dtheta), R*(1-cos(dtheta))) within a small
+tolerance.
+'''
+
+[[finding]]
+id = "TPP-101"
+title = "Important PathPlannerNode behaviours have no tests"
+severity = "medium"
+category = "tests"
+file = "tests/path_planner_test.py"
+anchor = "- Tracks deadline misses"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 12
+what = '''
+Missing: goal/pose before map (crashes, path_planner.py:133); goal before map with non-unit
+resolution (wrong cell, path_planner.py:78); a map change triggering a replan (it doesn't,
+path_planner.py:93); deadline accounting (the module docstring, line 12, claims it, but only
+TEST 1 checks the initial 0); the nav_msgs OccupancyGrid branch of map_callback (TEST 7,
+230-250, passes a raw array and only checks the grid is not None; OccupancyGrid is imported at
+line 19 but unused).
+'''
+why = '''
+Each of these is a verified bug that the green 23/23 suite does not see.
+'''
+evidence = '''
+probe_node.py / probe_node2.py outputs quoted in the corresponding path_planner.py findings.
+'''
+hint = '''
+Add one test per scenario; for deadlines set planning_time_budget=0 and assert the counter
+increments on both success and failure paths.
+'''
+
+[[finding]]
+id = "TPP-103"
+title = "Tests 13/21 pass grid (row, col) as world (x, y); symmetric starts hide the axis swap"
+severity = "medium"
+category = "tests"
+file = "tests/path_planner_test.py"
+anchor = "node.current_pose_callback(make_pose_msg(start[0], start[1]))"
+symbol = "test_planning_pose_update_used_as_start"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 564
+what = '''
+TEST 13 (370) and TEST 21 (564) build the pose with make_pose_msg(start[0], start[1]) where
+start is a (row, col) cell, but world x maps to columns. They pass only because (0,0) and (2,2)
+are symmetric. pose_at_cell (48-50) exists for exactly this and is used by tests 12/16/17/19, so
+usage is inconsistent. Tests 11/14/15/18/20/22/23 send goal (0.0, 7.0), which is cell (7, 0).
+'''
+why = '''
+An x/y swap regression at the world<->grid boundary would not be caught, and readers are misled
+about which cell is used.
+'''
+evidence = '''
+probe_node.py: current_pose_callback(make_pose_msg(2,5)) -> path starts at '(5, 2)'.
+'''
+hint = '''
+Use pose_at_cell/goal_at_cell everywhere and an asymmetric start such as (2, 5).
+'''
+
+[[finding]]
+id = "TPP-104"
+title = "D* node tests only check flags; nothing verifies D* produces a usable result"
+severity = "medium"
+category = "tests"
+file = "tests/path_planner_test.py"
+anchor = "if node.dstar_start is not None:"
+symbol = "test_dstar_start_set_after_plan"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 609
+what = '''
+TEST 23's docstring says dstar_start must equal the robot start, but it only checks `is not
+None`. TEST 22 only checks dstar_initialized, which is set unconditionally. No test checks that
+g(start) is finite/correct or that any D* output is used.
+'''
+why = '''
+The D* half of PathPlannerNode can be broken or dead without any test failing.
+'''
+evidence = '''
+Read lines 577-615 and path_planner.py 130-144.
+'''
+hint = '''
+Assert dstar_start == start, and that the D* result (once used) matches A*'s path cost.
+'''
+
+[[finding]]
+id = "TPU-101"
+title = "Exhaustion tests force an unreachable internal state; no test drives a path to its end"
+severity = "medium"
+category = "tests"
+file = "tests/pure_pursuit_test.py"
+anchor = "c.waypoint = len(path)  # Force exhausted state"
+symbol = "test_lookahead_returns_last_point_when_waypoint_exhausted"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 160
+what = '''
+TEST 7 and TEST 15 (line 368) write c.waypoint = len(path), a value find_next_lookahead can
+never produce (it only assigns i < len(path)). They therefore test a dead branch, while the real
+end-of-path behaviour (all remaining points within ld -> None -> (0,0) and the robot stops 2 m
+short) is untested. No test in the suite simulates the robot to the final waypoint.
+'''
+why = '''
+The suite is green while the controller cannot reach a goal.
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_control/repro1.py:
+final 'waypoint idx=10' for an 11-point path after driving to the stop - the forced index 11
+never occurs.
+'''
+hint = '''
+Replace with a closed-loop unicycle test (as in motion_controller_test TEST 16) asserting the
+final pose is within tolerance of path[-1].
+'''
+
+[[finding]]
+id = "TPU-103"
+title = "Bound test includes theta=pi, where the robot faces away and gets zero steering - accepted"
+severity = "medium"
+category = "tests"
+file = "tests/pure_pursuit_test.py"
+anchor = "for theta in [0.0, math.pi/4, math.pi/2, math.pi, -math.pi/2]:"
+symbol = "test_pure_pursuit_omega_bounded_by_curvature_formula"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 392
+what = '''
+At theta = pi the lookahead point is directly behind, alpha = pi, sin(alpha) ~ 1e-16, so omega ~
+0 and the robot drives straight away from the path forever. TEST 16 only checks |omega| <=
+2v/ld, which this degenerate output trivially satisfies.
+'''
+why = '''
+The classic pure-pursuit singularity (target behind) is exercised and passed instead of flagged.
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_control/repro1.py
+-> '== pure pursuit: facing away (theta=pi) omega' -> '(1.0,
+np.float64(-1.2246467991473532e-16))'.
+'''
+hint = '''
+Add a test that a target behind the robot produces a decisive turn (or rotate-in-place / reduced
+v) and handle |alpha| > pi/2 in the source.
+'''
+
+[[finding]]
+id = "TRC-101"
+title = "Governor tests poke closest_obstacle_dist directly; no behind/recovery/boundary/stale cases"
+severity = "medium"
+category = "tests"
+file = "tests/robot_controller_test.py"
+anchor = "c.closest_obstacle_dist = 0.3"
+symbol = "test_control_loop_stops_for_very_close_obstacle"
+source = "reviewer"
+confidence = "confirmed"
+lead_checked = true
+reviewed_line = 283
+what = '''
+TESTs 13, 14 and 22 write closest_obstacle_dist instead of feeding a LaserScan, so the
+scan->governor path is never tested end-to-end. Not tested: obstacle behind the robot, recovery
+(can it move again once something is < 0.5 m), the exact boundaries 0.5 and 1.0, stale data.
+Also make_scan defaults angle_min=-pi, so in TESTs 3-7 index 0 is directly BEHIND the robot and
+the suite treats it as a forward obstacle without comment.
+'''
+why = '''
+The deadlock and direction-blindness of the governor pass silently.
+'''
+evidence = '''
+Read lines 38-47, 277-325, 501-516; reproduction of the deadlock in the governor finding.
+'''
+hint = '''
+Drive the governor through lidar_callback with scans at chosen angles; add cases for behind-only
+obstacles, escape/recovery, dist == 0.5 and == 1.0, and no-scan/stale-scan.
+'''
+
+[[finding]]
+id = "TRC-102"
+title = "Path-mode tests ignore deadline_misses even though they log deadline misses"
+severity = "medium"
+category = "tests"
+file = "tests/robot_controller_test.py"
+anchor = "if cmd is not None and (abs(cmd.linear.x) > 0.0 or abs(cmd.angular.z) > 0.0):"
+symbol = "test_path_mode_drives_along_path"
+source = "reviewer"
+confidence = "reproduced"
+lead_checked = true
+reviewed_line = 460
+what = '''
+TESTs 20 and 22 run the DWA path mode and only check the command. The suite's own log shows
+'Deadline miss!' in both, but no test asserts c.deadline_misses == 0, and no test feeds a
+realistic obstacle-laden scan. The 'Monitor real-time performance' responsibility is untested.
+'''
+why = '''
+The real-time violation (up to 50x over budget) is printed during a green run and ignored.
+'''
+evidence = '''
+the full-suite run logs: robot_controller_test.log: line 244 '[WARN] Deadline miss! Loop took
+28.96msTotal misses: 1' (TEST 20) and line 276 (TEST 22); suite result 22/22 passed.
+'''
+hint = '''
+Assert deadline_misses == 0 after N path-mode cycles with a populated scan (and mark it as a
+performance test if it must be tolerant).
+'''
+
+[[finding]]
+id = "TSM-104"
+title = "Battery tests use +/-1.0 offsets and miss the threshold boundaries"
+severity = "medium"
+category = "tests"
+file = "tests/state_machine_test.py"
+anchor = "sm.battery_level = sm.max_threshold + 1.0"
+symbol = "test_charging_above_max_no_mission_transitions_to_idle"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 585
+what = '''
+TESTs 23-27 set min-1, min+1 and max+1; the exact max_threshold boundary (which yields ERROR) is
+never tested. Only the IDLE min threshold has an exact-boundary case (TEST 8). Tests also use
+the 1.0 offsets as magic numbers.
+'''
+why = '''
+The boundary bug that sends the robot to ERROR passes.
+'''
+evidence = '''
+Read lines 538-636.
+'''
+hint = '''
+Add cases at exactly min_mission_threshold and max_threshold in CHARGING.
+'''
+
+[[finding]]
+id = "TSM-105"
+title = "ERROR tests never observe the ERROR state or the fate of the mission"
+severity = "medium"
+category = "tests"
+file = "tests/state_machine_test.py"
+anchor = "if not sm.has_error:"
+symbol = "test_error_flag_triggers_error_state"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 652
+what = '''
+TEST 28's docstring says has_error must transition to ERROR, but the comment (lines 650-651)
+admits ERROR is never observable and the assertion only checks has_error was cleared - the same
+thing TEST 29 checks. Neither runs with a mission in flight, neither checks /robot_state for
+ERROR.
+'''
+why = '''
+Duplicate tests that cannot detect the dropped-mission and unpublished-ERROR bugs.
+'''
+evidence = '''
+Read lines 641-676.
+'''
+hint = '''
+Test error during PICK_NAV with a queued mission: assert ERROR is published and the mission is
+re-queued/marked failed.
+'''
+
+[[finding]]
+id = "TWM-101"
+title = "Warehouse suite loads the map with generate_map's reader and its own binarize, not the shipped map_publisher"
+severity = "medium"
+category = "tests"
+file = "tests/warehouse_map_test.py"
+anchor = "from generate_map import read_pgm, inflate            # the artifact's own toolkit"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 35
+what = '''
+load_world_grid uses maps/generate_map.read_pgm, and binarize (L69-73) re-implements
+map_publisher.classify plus occupancy_to_grid's policy. map_publisher.read_pgm
+(navi_bot/map_publisher.py L74-99) is a verbatim duplicate of the generate_map reader. The suite
+also inserts the maps/ directory into sys.path.
+'''
+why = '''
+The planner tests on the real map do not go through the code that publishes /map in production.
+A divergence (for example in the duplicated reader or in flip handling) would leave this suite
+green.
+'''
+evidence = '''
+Read warehouse_map_test L32-73, map_publisher.py L74-113 and generate_map.py L240-264 (same
+body).
+'''
+hint = '''
+Load through MapPublisherNode or classify + occupancy_to_grid, and keep one PGM reader.
+'''
+
+[[finding]]
+id = "TWM-103"
+title = "Coarse warehouse drive feeds metre-valued DWA constants a 0.5 m/cell grid"
+severity = "medium"
+category = "tests"
+file = "tests/warehouse_map_test.py"
+anchor = "coarse = downsample(binarize(load_world_grid()), 10)   # 200/10 -> 20x20"
+symbol = "crossing"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 269
+what = '''
+DWA has no resolution notion: ROBOT_RADIUS=0.25, CONTACT=0.875 and max_vel_x=1.0 are interpreted
+as cells. On the 0.5 m downsample the simulated robot therefore has a 0.125 m radius and a 0.5
+m/s top speed, and perception_radius=3.5 cells (1.75 m) differs from the controller's 1.5 m
+obstacle_threshold. Block-max pooling inflates walls by up to 0.5 m, which partly hides the
+problem.
+'''
+why = '''
+The 'end-to-end warehouse crossing' does not test the robot's real footprint or speed on the
+real map scale.
+'''
+evidence = '''
+Read dwa.py L21-27 and L40, and warehouse_map_test L215-216 and L269.
+'''
+hint = '''
+Give DWA a resolution (scale constants) or run on the metric grid, and make the test state its
+scale explicitly.
+'''
+
+[[finding]]
+id = "TWN-102"
+title = "1.5-cell goal tolerance plus 'path exhausted == reached' accepts robots that stop well short"
+severity = "medium"
+category = "tests"
+file = "tests/waypoint_nav_test.py"
+anchor = "GOAL_TOLERANCE  = 1.5       # meters — waypoint reached threshold"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 41
+what = '''
+A goal counts as reached within 1.5 cells. When pure_pursuit returns (0, 0) because no remaining
+waypoint is at least lookahead (1.0) away, L158-162 also count that as reached if the robot is
+within 1.5. Production uses PathFollower goal_tol 0.7.
+'''
+why = '''
+A robot ending 1.5 cells from the pickup or delivery cell passes. That is 2x the production
+arrival tolerance, so the tests cannot catch arrival or precision regressions.
+'''
+evidence = '''
+Read L41 and L158-162, and compare with navi_bot/control/path_follower.py L33 (goal_tol=0.7).
+'''
+hint = '''
+Use the production tolerance (or import it), and treat 'path exhausted while outside tolerance'
+as a failure.
+'''
+
+[[finding]]
+id = "TWN-106"
+title = "'Obstacle map' test never goes near the wall it claims to route around"
+severity = "medium"
+category = "tests"
+file = "tests/waypoint_nav_test.py"
+anchor = "mission = make_mission('M002', pickup=(2, 2), delivery=(2, 17))"
+symbol = "test_single_mission_obstacle_map"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 332
+what = '''
+The docstring says 'Robot must navigate around the wall'. The wall occupies rows 5-14 at col 10,
+but both legs (0,0)->(2,2)->(2,17) run along rows 0-2, at least 4 cells from any obstacle.
+'''
+why = '''
+TEST 2 adds no coverage over TEST 1 (clear map), yet it is reported as obstacle-avoidance
+coverage.
+'''
+evidence = '''
+python code_review/evidence/reviewer-scripts/tests_integration/wp_probe.py:
+'test_single_mission_obstacle_map: passed=True steps=173 min_clear_to_obstacle_centre=4.002
+poses_in_occupied_cell=0'.
+'''
+hint = '''
+Put pickup and delivery on opposite sides of the wall (e.g. (8,2) -> (8,17)) so the route must
+use the gap at (10,10), and assert clearance.
+'''
+
+[[finding]]
+id = "TWN-107"
+title = "Error-recovery test does not check the 'mission queue can continue' claim; the in-flight mission is silently dropped"
+severity = "medium"
+category = "tests"
+file = "tests/waypoint_nav_test.py"
+anchor = "sm.update_state_machine()  # ERROR -> IDLE"
+symbol = "test_error_recovery_during_mission"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 520
+what = '''
+The docstring promises that the mission queue can continue after recovery. The test never adds a
+second mission or re-enters PICK_NAV. In one tick the source goes PICK_NAV -> ERROR -> IDLE
+(handle_error_state, state_machine.py L294-302), leaving current_mission set with status
+'navigating', and nothing re-queues it. The comment 'ERROR -> IDLE' also hides that the ERROR
+state is entered and left within a single call.
+'''
+why = '''
+Losing the in-flight mission after an error is untested and probably unintended, and the test
+name suggests it is covered.
+'''
+evidence = '''
+Read waypoint_nav_test L504-535 and state_machine.py L294-302 (has_error=False, transition IDLE;
+current_mission untouched).
+'''
+hint = '''
+Assert what should happen to current_mission (re-queued or failed), and add a follow-up mission
+that must be accepted.
+'''
+
+[[finding]]
+id = "TWS-101"
+title = "Websocket spec pins the legacy two-argument handler(websocket, path) signature"
+severity = "medium"
+category = "tests"
+file = "tests/websocket_test.py"
+anchor = "asyncio.run(server.handler(ws, '/'))"
+symbol = "test_handler_register_deregister"
+source = "reviewer"
+confidence = "likely"
+known_wip = true
+reviewed_line = 171
+what = '''
+Tests 5-7 (L171, L195, L219) call server.handler(ws, '/'). In current websockets releases (the
+new asyncio implementation, default for websockets.serve since v14), the handler is called with
+a single connection argument; the path is available as connection.request.path. The two-argument
+form was deprecated in 10.1. A correct modern implementation, handler(self, websocket), would
+fail these tests with TypeError, while the legacy form would fail at runtime under
+websockets.serve.
+'''
+why = '''
+The spec steers the implementation toward an API the dependency no longer calls that way.
+'''
+evidence = '''
+Could not install websockets in this sandbox (not installed: 'ModuleNotFoundError: No module
+named websockets'). Claim based on the websockets 13/14 changelog (new asyncio server,
+single-argument handler).
+'''
+hint = '''
+Make the spec call handler(ws) (or accept both via a default path=None) and pin a websockets
+version in setup.py.
+'''
+
+[[finding]]
+id = "TAD-104"
+title = "theta parameter is dead; the start heading is always taken from the path"
+severity = "low"
+category = "tests"
+file = "tests/astar_dwa_integration_test.py"
+anchor = "th = (math.atan2(waypoints[1][1] - waypoints[0][1], waypoints[1][0] - waypoints[0][0])"
+symbol = "follow_path"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 115
+what = '''
+Every caller passes theta=0.0, but it is used only when the path has fewer than 2 points, in
+which case the loop exits immediately anyway. Robots in production start with an arbitrary
+heading.
+'''
+why = '''
+Starting misaligned with the path, a realistic case the comment itself says makes the robot
+'spiral', is never tested.
+'''
+evidence = '''
+Read L101-117 and the calls at L179/L215.
+'''
+hint = '''
+Drop the parameter, or add a test that starts with a heading off the path.
+'''
+
+[[finding]]
+id = "TAD-107"
+title = "Stale docstrings: 'Currently RED', and suite overviews that list the wrong tests"
+severity = "low"
+category = "docs"
+file = "tests/astar_dwa_integration_test.py"
+anchor = "that follows it without stalling. Currently RED — see the failure reason."
+symbol = "test_astar_dwa_end_to_end"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 196
+what = '''
+astar TEST 2 says 'Currently RED', but it passes (saved log: 'PASS: A*+DWA reached the goal in
+45 replans'). The astar module docstring (L11-18) describes only TESTs 1-3 and omits the
+moving-hazard TESTs 4-5. The dstar module docstring (L16-17) says the tests 'go green once'
+fixes land, but all 4 pass. The warehouse docstring (L7) speaks of 'the future map_publisher',
+which now exists. The waypoint_nav docstring (L14-15) says the pose 'is published back to
+PathPlannerNode via /current_pose ... through the mock ROS2 message bus', but publish_pose calls
+current_pose_callback directly.
+'''
+why = '''
+Readers, and the dashboard's test descriptions, get a wrong picture of the suite's status and
+scope.
+'''
+evidence = '''
+Saved logs in scratchpad/testruns: astar 5/5, dstar 4/4. Read the docstrings cited.
+'''
+hint = '''
+Update the docstrings to the current state.
+'''
+
+[[finding]]
+id = "TAS-101"
+title = "A* test module docstring names the wrong module"
+severity = "low"
+category = "docs"
+file = "tests/AStar_planner_test.py"
+anchor = "Test script for A* Path Planner from path_planner.py"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 3
+what = '''
+Says the planner comes from path_planner.py; the file imports navi_bot.planners.astar. The
+bullet list also omits the validity/optimality/corner-cut tests 13-15.
+'''
+why = '''
+Misleading.
+'''
+evidence = '''
+Read lines 2-10 and 18.
+'''
+hint = '''
+Update the docstring.
+'''
+
+[[finding]]
+id = "TAS-102"
+title = "Test modules configure root logging at import time"
+severity = "low"
+category = "standards"
+file = "tests/AStar_planner_test.py"
+anchor = "logging.basicConfig(level=logging.DEBUG)"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 21
+what = '''
+All four suites call logging.basicConfig(level=DEBUG) at module level (A* 21, D* 13, DWA 10,
+path_planner 22), so importing a test module reconfigures global logging and floods DEBUG output
+(the D* suite log is 1146 lines).
+'''
+why = '''
+Side effects on import; noisy logs hide real failures.
+'''
+evidence = '''
+Read the cited lines; the full-suite run logs: summary.txt lists 1146 lines for the D* suite.
+'''
+hint = '''
+Move basicConfig into main().
+'''
+
+[[finding]]
+id = "TAS-104"
+title = "test_blocked_map returns None (not False) for an empty-list result"
+severity = "low"
+category = "tests"
+file = "tests/AStar_planner_test.py"
+anchor = "if tester:"
+symbol = "test_blocked_map"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 173
+what = '''
+If plan returned [] the function falls off the end and returns None; main()'s sum(results) then
+raises TypeError instead of reporting FAIL.
+'''
+why = '''
+Crash instead of a clear failure report.
+'''
+evidence = '''
+Read lines 168-178 and 589-591: sum([None]) raises TypeError.
+'''
+hint = '''
+End every test with an explicit `return passed`.
+'''
+
+[[finding]]
+id = "TAS-105"
+title = "A* tests 7-12 are six near-identical copies that only check the last waypoint"
+severity = "low"
+category = "tests"
+file = "tests/AStar_planner_test.py"
+anchor = "elif tester and (goal == tester[-1]):"
+symbol = "test_straight_line_clear"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 196
+what = '''
+test_straight_line_clear ... test_staggered_obstacle (181-328) differ only in map and goal and
+pass if path[-1] == goal; they check no start, adjacency, occupancy or cost (TEST 13/14 do this
+properly for the same cases). A non-empty path not ending at goal falls to `return passed`
+without a FAIL log.
+'''
+why = '''
+Redundant tests inflate the pass count without adding coverage.
+'''
+evidence = '''
+Read the six functions; their cases are a subset of TEST 14's list (494-501).
+'''
+hint = '''
+Replace with one case table run through validate_path/path_cost, or delete.
+'''
+
+[[finding]]
+id = "TAS-106"
+title = "--list duplicates the 'TEST n:' prefix and truncates multi-line docstrings"
+severity = "low"
+category = "tests"
+file = "tests/AStar_planner_test.py"
+anchor = "doc = (t.__doc__ or t.__name__).strip().splitlines()[0]"
+symbol = "main"
+source = "reviewer"
+confidence = "reproduced"
+also_reported = 1
+reviewed_line = 573
+what = '''
+A* docstrings 1-5 start 'Test n:' and path_planner docstrings start 'TEST n:', so --list prints
+'TEST 1: Test 1: ...' / 'TEST 1: TEST 1: ...'; A* tests 6-15 have no number. DWA 4-6 show only
+half a sentence. Hand-written numbers in docstrings and log lines will drift on reordering. The
+runner block is copy-pasted in all four files.
+'''
+why = '''
+Noisy, inconsistent listing; numbers maintained by hand in two places.
+'''
+evidence = '''
+python tests/AStar_planner_test.py --list -> 'TEST 1: Test 1: None start coordinates'; python
+tests/path_planner_test.py --list -> 'TEST 1: TEST 1: PathPlannerNode must initialize with no
+goal, no path, no pose,'.
+'''
+hint = '''
+Drop numbers from docstrings/log lines and let the runner print them; move the runner into a
+shared helper.
+'''
+
+[[finding]]
+id = "TDD-102"
+title = "Commented-out replanning block and stray blank line in the D* drive_with_hazard copy"
+severity = "low"
+category = "dead-code"
+file = "tests/dstar_dwa_integration_test.py"
+anchor = "# if hz is not None:"
+symbol = "drive_with_hazard"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 298
+what = '''
+Lines 298-303 are a commented-out replan experiment that references an undefined 'dstar'. Line
+277 is a blank line inside the if body.
+'''
+why = '''
+This is dead code in a copy-pasted helper, which makes the copies drift further apart.
+'''
+evidence = '''
+Read L276-303.
+'''
+hint = '''
+Delete it, or turn it into a real replanning test.
+'''
+
+[[finding]]
+id = "TDS-104"
+title = "Docstring and naming slips in the D* test file"
+severity = "low"
+category = "docs"
+file = "tests/DStar_Lite_planner_test.py"
+anchor = "Random start and goal."
+symbol = "test_blocked_map"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 164
+what = '''
+test_blocked_map docstring says 'Random start and goal' but uses fixed (0,0)->(7,7) (168-169);
+setup docstring says 'D Start Lite' (19); local variable `d_start` holds the planner in tests
+4/5 (122, 142); the module has no docstring, unlike the A*/path_planner suites.
+'''
+why = '''
+Misleading to readers.
+'''
+evidence = '''
+Read the cited lines.
+'''
+hint = '''
+Fix wording and names.
+'''
+
+[[finding]]
+id = "TDS-109"
+title = "TEST 13 asserts on private k_m, which proves little about state reuse"
+severity = "low"
+category = "tests"
+file = "tests/DStar_Lite_planner_test.py"
+anchor = "if passed and d_star.k_m <= 0:"
+symbol = "test_incremental_replan_updates_km"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 575
+what = '''
+k_m > 0 only shows plan() took the not-re-initialized branch and the start moved; it does not
+show the reused g/rhs values give a correct result (the correctness check is validate_path
+without corner cuts or cost).
+'''
+why = '''
+Couples the test to an internal field while the meaningful property (replan == fresh optimum) is
+unchecked.
+'''
+evidence = '''
+Read lines 538-582 and dstar_lite.py 205-210.
+'''
+hint = '''
+Also assert the replan cost equals the reference optimum.
+'''
+
+[[finding]]
+id = "TDW-102"
+title = "Simulator re-hardcodes DWA's private control period and step"
+severity = "low"
+category = "duplication"
+file = "tests/DWA_planner_test.py"
+anchor = "for _ in range(5):  # integrate one control period (5 x 0.1 s)"
+symbol = "navigate_closed_loop"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 91
+what = '''
+The test integrates 5 x 0.1 s, duplicating dwa.plan's local `control_period = 0.5` / `step_time
+= 0.1` (dwa.py 184-185), which are not exposed. If the planner's period changes, the closed-loop
+test silently simulates a different system. tol=0.7 and max_replans=100 are unexplained magic
+numbers.
+'''
+why = '''
+Drift between planner assumptions and test simulation.
+'''
+evidence = '''
+Read the cited lines.
+'''
+hint = '''
+Expose control_period/step_time as planner attributes and read them in the test.
+'''
+
+[[finding]]
+id = "TDW-104"
+title = "Dead code in DWA tests 1-3"
+severity = "low"
+category = "style"
+file = "tests/DWA_planner_test.py"
+anchor = "current_pose = ()"
+symbol = "test_none_start"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 122
+what = '''
+`current_pose = ()` (122, 158, 194) is overwritten immediately; the `(theta is not None)` check
+is always true; in test 3 best_vel/best_omega (217-220) and the obstacle loop (211-214) are
+unused; test 1 draws an irrelevant random goal.
+'''
+why = '''
+Noise obscures what each test checks.
+'''
+evidence = '''
+Read the cited lines.
+'''
+hint = '''
+Remove.
+'''
+
+[[finding]]
+id = "TDW-106"
+title = "Stale 'future API' comment and hasattr guard: DWAPlanner already has set_occupancy_grid"
+severity = "low"
+category = "docs"
+file = "tests/DWA_planner_test.py"
+anchor = "# future API: when DWAPlanner grows set_occupancy_grid (like A*/D* Lite),"
+symbol = "test_valid_path"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 249
+what = '''
+Lines 249-252 and 336-339 (and the guard at 295) treat set_occupancy_grid as a future feature,
+but dwa.py line 60 defines it. With the grid set, every map obstacle is classified static, so
+the mover/yield logic and set_global_path scoring are never exercised by this unit suite.
+'''
+why = '''
+Misleading comment; hasattr would hide a removed or renamed method instead of failing.
+'''
+evidence = '''
+Read dwa.py 60-62 and is_dynamic_obstacle 99-112.
+'''
+hint = '''
+Call dwa.set_occupancy_grid directly; add small unit cases with a mover not in the grid and with
+a global path.
+'''
+
+[[finding]]
+id = "TGE-101"
+title = "geometry_test docstring still says some tests target functions with 'latent bugs'"
+severity = "low"
+category = "docs"
+file = "tests/geometry_test.py"
+anchor = "Several of these are acceptance tests: they pin down the *intended*"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 11
+what = '''
+L11-13 say several tests 'will pass once those functions are fixed', but all 14 pass and none is
+marked as an acceptance test.
+'''
+why = '''
+Stale docs make readers hunt for failures that do not exist.
+'''
+evidence = '''
+Suite log: 'Results: 14/14 passed'.
+'''
+hint = '''
+Remove or update the paragraph.
+'''
+
+[[finding]]
+id = "TIM-102"
+title = "Calibration spec only checks a flag, blessing a calibrate() that has no data source"
+severity = "low"
+category = "tests"
+file = "tests/imu_test.py"
+anchor = "imu.calibrate(num_samples=10)"
+symbol = "test_calibrate_sets_flag"
+source = "reviewer"
+confidence = "confirmed"
+known_wip = true
+reviewed_line = 173
+what = '''
+calibrate(num_samples) has no way to obtain samples (no msg argument or buffer read) and only
+sets calibrated=True. Test 6 asserts only the flag, and test 7 injects gyro_bias by hand. No
+test checks that calibrate computes a bias from stationary samples.
+'''
+why = '''
+The spec is green-able by a no-op, so the bias path is never exercised end to end.
+'''
+evidence = '''
+Reading imu_processor.py L44-57 and imu_test L167-204.
+'''
+hint = '''
+Define how calibration receives samples (e.g. calibrate(samples) or accumulate from
+process_imu_data) and assert the computed gyro_bias/accel_bias.
+'''
+
+[[finding]]
+id = "TKN-104"
+title = "Stale log text '(exposes clipping bug)' and wrong module name in header"
+severity = "low"
+category = "docs"
+file = "tests/kinematics_test.py"
+anchor = "logger.info(\"TEST 21: Validate — v=100 m/s must be rejected as infeasible (exposes clipping bug)\")"
+symbol = "test_validate_infeasible_command_rejected"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 479
+what = '''
+TEST 21's log line still says it 'exposes clipping bug', but validate_velocities now computes
+unclipped speeds and the test passes. The module docstring (line 3) names
+'diff_drive_kinematics.py' but the module is navi_bot/control/kinematics.py.
+'''
+why = '''
+Misleading log output and docs make readers think a known bug is still being exposed / look for
+a nonexistent file.
+'''
+evidence = '''
+Read lines 3 and 479; the full-suite run logs: kinematics_test.log shows 23/23 passed.
+'''
+hint = '''
+Drop the '(exposes clipping bug)' note and fix the module name in the docstring.
+'''
+
+[[finding]]
+id = "TKN-105"
+title = "TEST 23 symmetry check is true by construction and misses boundary cases"
+severity = "low"
+category = "tests"
+file = "tests/kinematics_test.py"
+anchor = "for omega in [0.5, 1.0, -0.5, -1.0]:"
+symbol = "test_validate_omega_sign_symmetry"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 515
+what = '''
+With v=0, +omega and -omega just swap |v_l| and |v_r|, so the check cannot fail for any
+implementation that uses abs on both wheels; all four omegas are also deep inside the feasible
+region (|omega*L/2| <= 0.2 < 1.0), so results are always True/True. No validate test probes the
+exact boundary (|wheel| == max_v) or v != 0.
+'''
+why = '''
+Adds a test count without adding detection power; the boundary (<= vs <) is untested.
+'''
+evidence = '''
+Read: robot max_v = 10*0.1 = 1.0; omega*L/2 for omega=1 is 0.2.
+'''
+hint = '''
+Test v != 0 and include a case exactly at the limit (e.g. v=1.0, omega=0 -> True; v=1.0+1e-6 ->
+False).
+'''
+
+[[finding]]
+id = "TLD-101"
+title = "Module docstring names a non-existent file (lidar_processor.py)"
+severity = "low"
+category = "docs"
+file = "tests/lidar_mock_test.py"
+anchor = "Test script for LidarProcessor from lidar_processor.py"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 3
+what = '''
+The module is navi_bot/sensors/lidar_processing.py, and the suite file is named
+lidar_mock_test.py although it tests the real processor.
+'''
+why = '''
+Minor confusion when navigating.
+'''
+evidence = '''
+Reading L3 and the import at L17.
+'''
+hint = '''
+Fix the filename in the docstring.
+'''
+
+[[finding]]
+id = "TLD-102"
+title = "Unused helpers obstacle_at_angle/blocked_scan and unused CLUSTER_EPS import; test 9 duplicates the helper inline"
+severity = "low"
+category = "dead-code"
+file = "tests/lidar_mock_test.py"
+anchor = "def obstacle_at_angle(angle_deg, distance=1.0, num_points=360, background=9.0):"
+symbol = "obstacle_at_angle"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 41
+what = '''
+obstacle_at_angle (L41-56) and blocked_scan (L58-60) are never called. CLUSTER_EPS is imported
+(L17) but unused. Test 9 (L245-252) re-implements obstacle_at_angle's logic inline, and tests
+12-16 build arrays by hand instead of using clear_scan/blocked_scan.
+'''
+why = '''
+Dead fixtures drift and mislead (obstacle_at_angle's docstring claims it 'exceeds
+CLUSTER_MIN_SAMPLES', which is only true below ~3.4 m).
+'''
+evidence = '''
+Grep in lidar_mock_test.py: obstacle_at_angle and blocked_scan appear only at their definitions;
+CLUSTER_EPS appears only in the import.
+'''
+hint = '''
+Use the helpers in tests 9 and 12-16 or delete them, and drop the unused import.
+'''
+
+[[finding]]
+id = "TLD-104"
+title = "Several lidar test docstrings/comments promise checks the body never makes"
+severity = "low"
+category = "tests"
+file = "tests/lidar_mock_test.py"
+anchor = "if not result[90]:"
+symbol = "test_clear_directions_blocked_on_close_obstacle"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 345
+what = '''
+Test 13 comment L344 says 'Direction 90 and its +-15 window must be blocked' but L345 checks
+only index 90. Test 8 docstring L215 says 'size must equal the number of points in the cluster'
+but L228 only checks size >= CLUSTER_MIN_SAMPLES (18 points are placed, so == 18 was checkable).
+Test 22 docstring L546 says 'Cells at exactly ROBOT_RADIUS distance must be marked', which is
+never asserted. Test 19 (L487-490) asserts only 'no IndexError', not that the in-bounds part of
+the disk was marked. Test 9 (L260) accepts a centroid up to 0.5 m from the target.
+'''
+why = '''
+Readers assume coverage that does not exist. An off-by-N cluster size or a missing edge cell
+would pass.
+'''
+evidence = '''
+Reading lines 213-233, 334-351, 476-494, 543-571.
+'''
+hint = '''
+Make each assertion match its docstring (size == 18; ring at exactly ROBOT_RADIUS marked;
+in-bounds cells of the edge obstacle marked), or reword the docstrings.
+'''
+
+[[finding]]
+id = "TLD-106"
+title = "Identical custom runner and boilerplate copy-pasted into every suite"
+severity = "low"
+category = "duplication"
+file = "tests/lidar_mock_test.py"
+anchor = "args = sys.argv[1:]"
+symbol = "main"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 602
+what = '''
+The main() argument parsing, --list, single-test selection and exit-code logic (lidar_mock_test
+L576-625, scan_matching_test L387-426, odometry_test L239-276, imu_test L265-301, geometry_test
+L364-405, profiler_test L268-306, websocket_test L233-267) is duplicated verbatim. So are the
+per-test 'passed / logger.info("PASS" if passed else "FAIL")' pattern and module-level
+logging.basicConfig(level=logging.DEBUG). All tests are registered and the 'TEST n' log numbers
+match list positions in all 7 suites, so there are no registration defects.
+'''
+why = '''
+Any runner fix must be made in many places. The hand-maintained 'TEST n:' strings can drift when
+tests are reordered.
+'''
+evidence = '''
+Reading all seven main() functions; checked the tests list against the log 'TEST n' strings.
+'''
+hint = '''
+Move the runner into a shared tests/_runner.py (or adopt pytest, which can still collect these
+functions), and derive test numbers from list position.
+'''
+
+[[finding]]
+id = "TMC-102"
+title = "dt<=0 test only checks 'no exception'; negative dt silently corrupts the integral"
+severity = "low"
+category = "tests"
+file = "tests/motion_controller_test.py"
+anchor = "out = pid.update(1.0, 0.0)"
+symbol = "test_pid_zero_dt"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 109
+what = '''
+TEST 6 never inspects the output (a NaN or huge value would pass). dt < 0 is untested; the
+source integrates it (integral += error*dt) so a negative dt drives the integral the wrong way.
+'''
+why = '''
+Timing glitches (clock jumps, out-of-order stamps) would silently corrupt the integral term
+without any test noticing.
+'''
+evidence = '''
+cd "/c/Users/evan8/Desktop/Navi Bot" && python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_control/repro1.py
+-> 'neg dt out -0.1 integral -0.1'.
+'''
+hint = '''
+Assert the dt=0 output equals the P term only; define and test behaviour for dt<0 (ignore update
+/ return last output).
+'''
+
+[[finding]]
+id = "TMC-104"
+title = "Closed-loop test never exercises heading goals, goal changes or stopping after arrival"
+severity = "low"
+category = "tests"
+file = "tests/motion_controller_test.py"
+anchor = "if math.hypot(goal[0] - x, goal[1] - y) < mc.goal_tolerance:"
+symbol = "test_closed_loop_convergence"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 300
+what = '''
+TEST 16 stops the simulation the moment the pose is within tolerance (its own hypot check, not
+mc.is_goal_reached), so it never checks that the commanded velocity goes to zero and stays
+there, never uses a goal theta (rotate-in-place branch), and never changes goals (where the
+PID-state carry-over bug shows). The unicycle plant ignores wheel limits /
+DifferentialDriveKinematics.
+'''
+why = '''
+The only end-to-end controller test misses the behaviours most likely to be wrong.
+'''
+evidence = '''
+Read lines 284-315.
+'''
+hint = '''
+Continue the loop N steps after arrival and assert |v|,|omega| ~ 0 and is_goal_reached; add
+variants with goal theta and with a mid-run set_goal.
+'''
+
+[[finding]]
+id = "TPP-102"
+title = "make_grid is unused and its docstring is false"
+severity = "low"
+category = "dead-code"
+file = "tests/path_planner_test.py"
+anchor = "\"\"\"Wrap a numpy array as a mock OccupancyGrid-like object the planners accept.\"\"\""
+symbol = "make_grid"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 57
+what = '''
+make_grid returns the array unchanged (58) despite claiming to wrap it as an OccupancyGrid-like
+object, and nothing calls it; `OccupancyGrid` imported at line 19 is unused.
+'''
+why = '''
+Dead, misleading helper.
+'''
+evidence = '''
+Grep: no callers of make_grid.
+'''
+hint = '''
+Delete it, or make it build a real message and use it in TEST 7.
+'''
+
+[[finding]]
+id = "TPR-101"
+title = "profiler_test docstring claims the class is imported with a misspelt name"
+severity = "low"
+category = "docs"
+file = "tests/profiler_test.py"
+anchor = "(PerforamnceProfiler). The statistics tests are acceptance tests for the"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 13
+what = '''
+L12-14 say the class is imported 'as spelled in the source (PerforamnceProfiler)', but L21
+imports PerformanceProfiler (the source class is spelled correctly; only the module docstring at
+profiler.py L3 says 'Perforamnce').
+'''
+why = '''
+Stale and confusing.
+'''
+evidence = '''
+Reading test L12-14 and L21; profiler.py L3, L12.
+'''
+hint = '''
+Delete the note and fix the source docstring typo.
+'''
+
+[[finding]]
+id = "TPR-103"
+title = "Statistics test skips std and couples to internals; defaultdict access can make print_report crash"
+severity = "low"
+category = "tests"
+file = "tests/profiler_test.py"
+anchor = "prof.execution_times['task'].extend(samples)"
+symbol = "test_get_statistics_values"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 134
+what = '''
+Test 6's docstring promises mean/max/min/std/count but `expected` (L137-139) omits std. Tests 3,
+4, 6 and 10 read or write prof.execution_times directly. Because execution_times is a
+defaultdict (profiler.py L21), merely reading a missing key creates an empty deque.
+get_statistics/print_report then fail on it (np.max of an empty array).
+'''
+why = '''
+A wrong std would pass. The tests are tied to private storage, and the profiler has a latent
+crash path.
+'''
+evidence = '''
+python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_sensors/prof_probe.py:
+'print_report after defaultdict read -> ValueError zero-size array to reduction operation
+maximum which has no identity'.
+'''
+hint = '''
+Assert std (0.008165 for the samples), use get_statistics()['count'] instead of internals, and
+have get_statistics return None for empty histories.
+'''
+
+[[finding]]
+id = "TPU-102"
+title = "TEST 10 enshrines constant forward speed (no slow-down near goal or in sharp turns)"
+severity = "low"
+category = "tests"
+file = "tests/pure_pursuit_test.py"
+anchor = "if not math.isclose(v_out, v, abs_tol=1e-9):"
+symbol = "test_pure_pursuit_linear_velocity_unchanged"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 246
+what = '''
+The test requires v_out == configured v always. Combined with the missing end-of-path handling,
+this means the controller is required to approach the goal at full speed and stop abruptly with
+(0,0). The monotonicity tests (9, 14) on straight/two-point paths are similarly weak (true for
+almost any implementation).
+'''
+why = '''
+Prevents a reasonable future fix (speed scheduling) from being expressed without editing the
+test; weak tests inflate the passing count.
+'''
+evidence = '''
+Read lines 233-252, 198-228.
+'''
+hint = '''
+Test v only where it is part of the contract (e.g. v>0 while tracking, v->0 at goal).
+'''
+
+[[finding]]
+id = "TRC-103"
+title = "Failure branches dereference cmd without a None check, crashing the whole runner"
+severity = "low"
+category = "tests"
+file = "tests/robot_controller_test.py"
+anchor = "if cmd.linear.x != 0.0 or cmd.angular.z != 0.0:"
+symbol = "test_path_mode_goal_reached_reports_nav_status"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 487
+what = '''
+TEST 21 line 487 and the FAIL messages in TESTs 13/22 (lines 290, 514) access cmd.linear.x when
+cmd may be None. main() runs tests in a bare list comprehension (line 566) with no try/except,
+so one AttributeError aborts the run and hides the remaining results. Same runner pattern in all
+five suites.
+'''
+why = '''
+A real regression shows up as a traceback instead of a clean FAIL plus the rest of the report.
+'''
+evidence = '''
+Read lines 286-291, 487, 510-515, 566.
+'''
+hint = '''
+Guard with 'cmd is None' and wrap each test call in try/except that records a failure.
+'''
+
+[[finding]]
+id = "TSC-102"
+title = "Spec leaves 'too few points' and the fitness unit undefined while asserting hard thresholds"
+severity = "low"
+category = "tests"
+file = "tests/scan_matching_test.py"
+anchor = "for label, current in (('two points', [(0.0, 0.0), (1.0, 1.0)]), ('empty', [])):"
+symbol = "test_degenerate_input_degrades"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 302
+what = '''
+Test 10 requires a 2-point scan to be treated as degenerate, but no minimum point count is
+stated in the contract (L22-23) or exported as a constant. Test 9 (L284) and test 10 (L313)
+assert fitness thresholds of 5e-3 and 0.05, and test 1 asserts 1e-6, without saying whether
+fitness is an MSE (m^2), an RMS (m) or a mean distance. The source uses sklearn MSE.
+'''
+why = '''
+An implementer can satisfy the spec's intent and still fail on an arbitrary unit or threshold
+choice.
+'''
+evidence = '''
+Reading module docstring L19-23 and lines 143, 284, 313.
+'''
+hint = '''
+State the unit (e.g. RMS metres over inlier correspondences) and the minimum point count (e.g. a
+MIN_SCAN_POINTS constant) in the contract.
+'''
+
+[[finding]]
+id = "TSC-103"
+title = "Test 12 passes for any output and never times the 'returns promptly' claim"
+severity = "low"
+category = "tests"
+file = "tests/scan_matching_test.py"
+anchor = "logger.info(f\"  OK   max_iterations=1 returned {tuple(round(v, 4) for v in got)} \""
+symbol = "test_accepts_tuning_kwargs"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 379
+what = '''
+Test 12's docstring says it checks that a small budget 'returns promptly (no hang)', but nothing
+measures time and any well-shaped return value passes. It currently passes against a broken ICP.
+The kwargs are also already exercised by test 6 (initial_guess).
+'''
+why = '''
+Adds a green tick without proving behaviour.
+'''
+evidence = '''
+Suite log: test 12 PASS while 9/12 fail.
+'''
+hint = '''
+Assert that max_iterations=1 actually changes the result relative to max_iterations=50, or that
+elapsed time is below a bound. Otherwise fold it into another test.
+'''
+
+[[finding]]
+id = "TSM-102"
+title = "Same fire/flag walk-through sequence copy-pasted across five tests"
+severity = "low"
+category = "duplication"
+file = "tests/state_machine_test.py"
+anchor = "# Walk through to DELIVERY_NAV"
+symbol = "test_delivery_nav_at_goal_transitions_to_delivering"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 439
+what = '''
+TESTs 17, 19, 20, 21, 22 each repeat the same 5-11 line sequence of fire(sm) and private flag
+writes to reach a state.
+'''
+why = '''
+Any change to the flow must be edited in five places; easy for the copies to drift.
+'''
+evidence = '''
+Read lines 353-360, 414-421, 438-449, 468-481, 513-526.
+'''
+hint = '''
+Extract helpers like advance_to(sm, RobotState.DELIVERY_NAV) driven by public inputs.
+'''
+
+[[finding]]
+id = "TWM-102"
+title = "nearest_free BFS is unbounded off-grid and has no distance limit"
+severity = "low"
+category = "robustness"
+file = "tests/warehouse_map_test.py"
+anchor = "n = (r + dr, c + dc)"
+symbol = "nearest_free"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 99
+what = '''
+Neighbours are enqueued without bounds checks; only the return is bounds-gated. On a grid with
+no free cell the BFS walks out into infinite space and never terminates. A station swallowed by
+a coarse block can also be snapped arbitrarily far away without any check.
+'''
+why = '''
+The test could hang, or silently plan from or to a location unrelated to the station.
+'''
+evidence = '''
+Read L87-103.
+'''
+hint = '''
+Bounds-check before enqueuing, and assert that the snapped cell is within about 1 coarse cell of
+the station.
+'''
+
+[[finding]]
+id = "TWM-104"
+title = "Mid-file constant placement and magic numbers in the warehouse suite"
+severity = "low"
+category = "standards"
+file = "tests/warehouse_map_test.py"
+anchor = "CONTACT = 0.75   # robot footprint + cell half-width, as in the integration suites"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 317
+what = '''
+CONTACT is defined at L317 between functions instead of with the other constants, and duplicates
+(with drift) the DWA value. The hazard lambdas (L436, L443) and the factor 10 / indices in
+crossing() are magic numbers.
+'''
+why = '''
+This hurts readability and is the source of the drift reported above.
+'''
+evidence = '''
+Read the lines.
+'''
+hint = '''
+Import the shared constants and name the scenario parameters.
+'''
+
+[[finding]]
+id = "TWN-101"
+title = "Suite hard-wires mock_ros2 while the nodes use ros_compat; unused OccupancyGrid import"
+severity = "low"
+category = "tests"
+file = "tests/waypoint_nav_test.py"
+anchor = "import navi_bot.mock_ros2 as rclpy"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 25
+what = '''
+The nodes import from ros_compat (real rclpy when available). The test calls mock_ros2.init() as
+'rclpy.init()' and builds mock Pose2D messages. In a sourced ROS 2 env the nodes would be real
+rclpy nodes and init() would reset only the mock bus. OccupancyGrid (L31) is imported but
+unused.
+'''
+why = '''
+The suite would behave inconsistently when run in the real ROS 2 environment, and its 'resets
+the bus' isolation guarantee would not hold.
+'''
+evidence = '''
+Read L25-31, and ros_compat.py L25-47.
+'''
+hint = '''
+Import rclpy, Pose2D and init from navi_bot.ros_compat, and drop the unused import.
+'''
+
+[[finding]]
+id = "TWN-103"
+title = "Odometry is both plant and estimator, and tick truncation biases motion"
+severity = "low"
+category = "tests"
+file = "tests/waypoint_nav_test.py"
+anchor = "return int(revolutions * ticks_per_rev)"
+symbol = "sim_ticks"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 117
+what = '''
+The robot's 'true' pose IS the WheelOdometry estimate; there is no separate plant. int()
+truncates toward zero every step: 159.15 -> 159 ticks at 1 m/s, a 0.1% loss, and it acts
+asymmetrically on the two wheels while turning.
+'''
+why = '''
+Odometry error can never be detected by these tests. Small drift is injected systematically
+instead of carrying the fractional remainder.
+'''
+evidence = '''
+Read L114-117 and L175-180. 0.1 m / (2*pi*0.1 m) * 1000 = 159.15 ticks.
+'''
+hint = '''
+Accumulate fractional ticks, and keep a ground-truth pose separate from the odometry estimate.
+'''
+
+[[finding]]
+id = "TWN-108"
+title = "'Total missions completed' always prints 5/5; mission_steps/total_steps are misnamed and unused"
+severity = "low"
+category = "tests"
+file = "tests/waypoint_nav_test.py"
+anchor = "logger.info(f\"  Total missions completed: {sum(1 for m in missions if True)}/5\")"
+symbol = "test_long_running_multi_waypoint_route"
+source = "reviewer"
+confidence = "confirmed"
+reviewed_line = 595
+what = '''
+sum(1 for m in missions if True) is just len(missions). mission_steps (L581) counts passing
+result keys, not steps, and total_steps is accumulated but never reported or asserted.
+'''
+why = '''
+The log reports 5/5 completed even when missions fail, which misleads anyone reading the log or
+the dashboard.
+'''
+evidence = '''
+Read L570-595.
+'''
+hint = '''
+Count missions whose results all passed, and drop or rename mission_steps/total_steps.
+'''
+
+[[finding]]
+id = "TWS-102"
+title = "Test 7 swallows every exception, including ones unrelated to the simulated error"
+severity = "low"
+category = "tests"
+file = "tests/websocket_test.py"
+anchor = "pass  # the simulated error (or broadcast bug) propagating is fine here"
+symbol = "test_handler_cleans_up_on_error"
+source = "reviewer"
+confidence = "confirmed"
+known_wip = true
+reviewed_line = 221
+what = '''
+`except Exception: pass` accepts any failure (TypeError from broadcast, AttributeError, etc.),
+as long as the client set ends empty. Test 6 also encodes echo-to-sender as required behaviour,
+which is a design choice that is not stated anywhere else.
+'''
+why = '''
+The test can pass while the handler fails for the wrong reason.
+'''
+evidence = '''
+Reading L209-228 and L184-206.
+'''
+hint = '''
+Expect only the simulated RuntimeError (e.g. assert type(e) is RuntimeError). Document or
+reconsider the echo-to-sender requirement.
+'''
+
+[[finding]]
+id = "TPR-102"
+title = "Wall-clock assertion is tolerant enough; not flaky in practice"
+severity = "info"
+category = "tests"
+file = "tests/profiler_test.py"
+anchor = "if elapsed is None or not (0.015 <= elapsed <= 0.5):"
+symbol = "test_start_stop_returns_elapsed"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 43
+what = '''
+Test 1 sleeps 20 ms and accepts 15-500 ms, and tests 5 and 8 rely on elapsed > 0.0 for a
+'guaranteed miss'. On Windows perf_counter is QueryPerformanceCounter (100 ns resolution), and
+Python 3.11+ sleep does not return early.
+'''
+why = '''
+Low flake risk; noted because the suite depends on wall-clock time.
+'''
+evidence = '''
+5 runs of 'python tests/profiler_test.py 1' measured 20.05-20.61 ms; python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_sensors/prof_probe.py:
+'elapsed<=0 occurrences in 200k start/stop: 0'.
+'''
+hint = '''
+Optionally inject a fake clock (time.perf_counter via a parameter) to make the timing tests
+deterministic.
+'''
+
+[[finding]]
+id = "TSC-101"
+title = "scan_match spec expectations are mathematically right; plain point-to-point ICP still cannot pass tests 3 and 5"
+severity = "info"
+category = "tests"
+file = "tests/scan_matching_test.py"
+anchor = "* TRANSFORM CONVENTION — pinned to the project's own geometry utilities:"
+source = "reviewer"
+confidence = "reproduced"
+reviewed_line = 13
+what = '''
+Checked the spec. make_current builds current = T^-1(reference) via inverse_transform_point, so
+transform_point(current, T) == reference, and T is the correct expected answer (pose of the
+current frame in the reference frame, column-vector CCW rotation). I wrote a textbook ICP from
+scratch to check that the fixtures are solvable. A point-to-line ICP recovers tests 2-8 exactly
+within tolerance. An SVD point-to-point ICP gets stuck in a local minimum on test 3 (8 deg pure
+rotation) and test 5 (0.12,-0.08,4 deg) at the 2 cm / 0.5 deg tolerance, though it passes 2, 4,
+6, 7 and 8.
+'''
+why = '''
+The owner should know that the current 3/12 is the implementation's fault, not the spec's. Also,
+the 2 cm / 0.5 deg cold-start tolerance effectively demands point-to-line (or a
+better-conditioned) ICP, not vanilla point-to-point.
+'''
+evidence = '''
+python
+C:/Users/evan8/AppData/Local/Temp/claude/738ef417e18052f3/0a4a6808-43fe-4936-9d58-6cdc90f47f1a/code_review/evidence/reviewer-scripts/tests_sensors/icp_probe2.py:
+'(0, 0, 0.1396) {} (0.0141, 0.049, 0.1072) False' vs '{'p2l': True} (0.0, -0.0, 0.1396) True';
+'(0.12, -0.08, 0.0698) {} ... False' vs p2l '... True'; partial/noisy/large-motion pass.
+'''
+hint = '''
+No change needed to the expectations. Optionally note in the module docstring that the
+tolerances assume point-to-line ICP.
+'''
